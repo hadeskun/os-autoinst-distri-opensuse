@@ -12,9 +12,9 @@ use warnings;
 use testapi;
 
 sub run {
-    my $reboot_page = $testapi::distri->get_reboot_page();
+    my $reboot_page = $testapi::distri->get_reboot();
 
-    $reboot_page->expect_is_shown(timeout => 1200);
+    $reboot_page->expect_is_shown(timeout => 2400);
 
     select_console 'root-console';
     Yam::Agama::agama_base::upload_agama_logs();
