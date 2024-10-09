@@ -425,10 +425,10 @@ sub wait_for_ssh {
         while (($duration = time() - $start_time) < $args{timeout}) {
             # timeout recalculated removing consumed time until now
             # We don't support password authentication so it would just block the terminal
-            $sysout = $self->ssh_script_output(cmd => 'sudo systemctl is-system-running', ssh_opts => $ssh_opts,
-                timeout => $args{timeout} - $duration, proceed_on_failure => 1, username => $args{username});
-            # result check
-            if ($sysout =~ m/initializing|starting/) {    # still starting
+            $sysout = retry_on_script_output(timeout => $args{timeout}, username => $args{username}, duration => $duration);
+
+              # result check
+              if ($sysout =~ m/initializing|starting/) {    # still starting
                 $exit_code = undef;
             }
             elsif ($sysout =~ m/running/) {    # startup OK
@@ -848,5 +848,28 @@ sub do_systemd_analyze_time {
     return @ret;
 }
 
+sub retry_on_script_output {
+    my (%args) = @_;
+    my $retries = 10;
+    my $delay_command = 10;
+    my $sys_response = "";
+    my $timeout = $args{timeout} // 600;
+    my $duration = $args{duration} // 20;
+
+    while ($retries--) {
+        $sys_response = ssh_script_output(
+            cmd => 'sudo systemctl is-system-running',
+            timeout => $timeout - $duration,
+            proceed_on_failure => 1,
+            username => $args{username}
+        );
+
+        last if $sys_response =~ /running/i;
+        sleep $delay_command;
+    }
+
+    record_info("SYS_STATE", $sys_response ? "System is running." : "Failed after retries.");
+    return $sys_response;
+}
 
 1;
