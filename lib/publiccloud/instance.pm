@@ -427,8 +427,8 @@ sub wait_for_ssh {
             # We don't support password authentication so it would just block the terminal
             $sysout = retry_on_script_output(timeout => $args{timeout}, username => $args{username}, duration => $duration);
 
-              # result check
-              if ($sysout =~ m/initializing|starting/) {    # still starting
+            # result check
+            if ($sysout =~ m/initializing|starting/) {    # still starting
                 $exit_code = undef;
             }
             elsif ($sysout =~ m/running/) {    # startup OK
