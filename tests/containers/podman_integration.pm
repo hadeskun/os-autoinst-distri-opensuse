@@ -17,8 +17,7 @@ use containers::common;
 use Utils::Architectures qw(is_x86_64 is_aarch64);
 use containers::bats;
 
-my $test_dir = "/var/tmp";
-my $podman_version = "";
+my $test_dir = "/var/tmp/podman-tests";
 my $oci_runtime = "";
 
 sub run_tests {
@@ -31,11 +30,13 @@ sub run_tests {
     my $args = ($rootless ? "--rootless" : "--root");
     $args .= " --remote" if ($remote);
 
-    assert_script_run "sed -i 's/^PODMAN_RUNTIME=/&$oci_runtime/' test/system/helpers.bash";
-
     my $quadlet = script_output "rpm -ql podman | grep podman/quadlet";
+
+    my $tmp_dir = script_output "mktemp -d -p /var/tmp test.XXXXXX";
+    selinux_hack $tmp_dir;
+
     my %_env = (
-        BATS_TMPDIR => "/var/tmp",
+        BATS_TMPDIR => $tmp_dir,
         PODMAN => "/usr/bin/podman",
         QUADLET => $quadlet,
     );
@@ -47,10 +48,22 @@ sub run_tests {
     script_run 'kill %1' if ($remote);
 
     my @skip_tests = split(/\s+/, get_required_var('PODMAN_BATS_SKIP') . " " . $skip_tests);
+
+    # Unconditionally ignore these flaky subtests
+    my @must_skip = (
+        # this test depends on the openQA worker's scheduler
+        "180-blkio",
+        # this test will fail if there's not "enough" free space
+        "320-system-df",
+    );
+    push @skip_tests, @must_skip;
+
     patch_logfile($log_file, @skip_tests);
     parse_extra_log(TAP => $log_file);
 
+    script_run 'podman rm -vf $(podman ps -aq --external)';
     assert_script_run "podman system reset -f";
+    script_run "rm -rf $tmp_dir";
 
     return ($ret);
 }
@@ -76,11 +89,7 @@ sub run {
     install_packages(@pkgs);
     install_ncat;
 
-    $oci_runtime = get_var("OCI_RUNTIME", script_output("podman info --format '{{ .Host.OCIRuntime.Name }}'"));
-    install_packages($oci_runtime);
-    script_run "mkdir /etc/containers/containers.conf.d";
-    assert_script_run "echo -e '[engine]\nruntime=\"$oci_runtime\"' >> /etc/containers/containers.conf.d/engine.conf";
-    record_info("OCI runtime", $oci_runtime);
+    $oci_runtime = install_oci_runtime;
 
     $self->bats_setup;
 
@@ -93,13 +102,16 @@ sub run {
 
     switch_to_user;
 
-    assert_script_run "cd $test_dir";
-
     # Download podman sources
-    $podman_version = get_podman_version();
-    script_retry("curl -sL https://github.com/containers/podman/archive/refs/tags/v$podman_version.tar.gz | tar -zxf -", retry => 5, delay => 60, timeout => 300);
-    assert_script_run("cd $test_dir/podman-$podman_version/");
+    my $podman_version = get_podman_version();
+    my $url = get_var("PODMAN_BATS_URL", "https://github.com/containers/podman/archive/refs/tags/v$podman_version.tar.gz");
+    assert_script_run "mkdir -p $test_dir";
+    assert_script_run("cd $test_dir");
+    script_retry("curl -sL $url | tar -zxf - --strip-components 1", retry => 5, delay => 60, timeout => 300);
+
+    # Patch tests
     assert_script_run "sed -i 's/bats_opts=()/bats_opts=(--tap)/' hack/bats";
+    assert_script_run "sed -i 's/^PODMAN_RUNTIME=/&$oci_runtime/' test/system/helpers.bash";
     assert_script_run "rm -f contrib/systemd/system/podman-kube@.service.in";
 
     # Compile helpers used by the tests
@@ -112,7 +124,7 @@ sub run {
     $errors += run_tests(rootless => 1, remote => 1, skip_tests => get_var('PODMAN_BATS_SKIP_USER_REMOTE', ''));
 
     select_serial_terminal;
-    assert_script_run("cd $test_dir/podman-$podman_version/");
+    assert_script_run("cd $test_dir");
 
     # root / local
     $errors += run_tests(rootless => 0, remote => 0, skip_tests => get_var('PODMAN_BATS_SKIP_ROOT_LOCAL', ''));
@@ -123,21 +135,15 @@ sub run {
     die "Tests failed" if ($errors);
 }
 
-sub cleanup() {
-    assert_script_run "cd ~";
-    script_run("rm -rf $test_dir/podman-$podman_version/");
-    bats_post_hook;
-}
-
 sub post_fail_hook {
     my ($self) = @_;
-    cleanup();
+    bats_post_hook $test_dir;
     $self->SUPER::post_fail_hook;
 }
 
 sub post_run_hook {
     my ($self) = @_;
-    cleanup();
+    bats_post_hook $test_dir;
     $self->SUPER::post_run_hook;
 }
 

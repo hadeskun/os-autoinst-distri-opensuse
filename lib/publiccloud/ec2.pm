@@ -31,7 +31,8 @@ sub find_img {
 
     $name = $self->prefix . '-' . $name;
 
-    my $out = script_output("aws ec2 describe-images  --filters 'Name=name,Values=$name'");
+    my $ownerId = get_var('PUBLIC_CLOUD_EC2_ACCOUNT_ID', script_output('aws sts get-caller-identity --query "Account" --output text'));
+    my $out = script_output("aws ec2 describe-images  --filters 'Name=name,Values=$name' --owners '$ownerId'");
     if ($out =~ /"ImageId":\s+"([^"]+)"/) {
         return $1;
     }
@@ -78,52 +79,7 @@ sub upload_img {
     # AMI of image to use for helper VM to create/build the image on CSP.
     my $helper_ami_id = get_var('PUBLIC_CLOUD_EC2_UPLOAD_AMI');
 
-    # in case AMI for helper VM is not provided in job settings fallback to predefined hash
-    unless (defined($helper_ami_id)) {
-
-        # AMI is region specific also we need to use different AMI's for on-demand/BYOS uploads
-        my $ami_id_hash = {
-            # suse-sles-15-sp4-byos-v20220915-hvm-ssd-x86_64
-            'us-west-1-byos' => 'ami-0cf60a7351ac9f023',
-            # suse-sles-15-sp4-v20220915-hvm-ssd-x86_64
-            'us-west-1' => 'ami-095b00d1799acbc5d',
-            # suse-sles-15-sp4-byos-v20220915-hvm-ssd-x86_64
-            'us-west-2-byos' => 'ami-02538b480fd1330ac',
-            # suse-sles-15-sp4-v20220915-hvm-ssd-x86_64
-            'us-west-2' => 'ami-0fbef12dbf17e9796',
-            # suse-sles-15-sp4-byos-v20220915-hvm-ssd-x86_64
-            'eu-central-1-byos' => 'ami-01fee8ad5154e745b',
-            # suse-sles-15-sp4-v20220915-hvm-ssd-x86_64
-            'eu-central-1' => 'ami-0622ab5c21c604604',
-            # suse-sles-15-sp4-v20220915-hvm-ssd-arm64
-            'eu-central-1-arm64' => 'ami-0f33a69f25295ee23',
-            # suse-sles-15-sp4-byos-v20220915-hvm-ssd-arm64
-            'eu-central-1-byos-arm64' => 'ami-0fe6d5a106cf46cce',
-            # suse-sles-15-sp4-v20220915-hvm-ssd-x86_64
-            'eu-west-1' => 'ami-0ddb9fc2019be3eef',
-            # suse-sles-15-sp4-byos-v20220915-hvm-ssd-x86_64
-            'eu-west-1-byos' => 'ami-0067ff53440565874',
-            # suse-sles-15-sp4-v20220915-hvm-ssd-arm64
-            'eu-west-1-arm64' => 'ami-06033303bb6c72a35',
-            # suse-sles-15-sp4-byos-v20220915-hvm-ssd-arm64
-            'eu-west-1-byos-arm64' => 'ami-0e70bccfe7758f9fe',
-            # suse-sles-15-sp4-byos-v20220915-hvm-ssd-x86_64
-            'us-east-2-byos' => 'ami-00d3e0231db6eeee3',
-            # suse-sles-15-sp4-v20220915-hvm-ssd-x86_64
-            'us-east-2' => 'ami-0ca19ecee2be612fc',
-            # suse-sles-15-sp4-v20220915-hvm-ssd-arm64
-            'us-east-1-arm64' => 'ami-05dbc19aca86fdae4',
-            # suse-sles-15-sp4-byos-v20220915-hvm-ssd-arm64
-            'us-east-1-byos-arm64' => 'ami-0e0756f0108a91de8',
-        };
-
-        my $ami_id_key = $self->provider_client->region;
-        $ami_id_key .= '-byos' if is_byos();
-        $ami_id_key .= '-arm64' if check_var('PUBLIC_CLOUD_ARCH', 'arm64');
-        $helper_ami_id = $ami_id_hash->{$ami_id_key} if exists($ami_id_hash->{$ami_id_key});
-    }
-
-    die('Unable to detect AMI for helper VM') unless (defined($helper_ami_id));
+    die('Please specify PUBLIC_CLOUD_EC2_UPLOAD_AMI variable.') unless (defined($helper_ami_id));
 
     my ($img_name) = $file =~ /([^\/]+)$/;
     my $img_arch = get_var('PUBLIC_CLOUD_ARCH', 'x86_64');
@@ -251,24 +207,23 @@ sub cleanup {
     $self->delete_keypair();
 }
 
-sub describe_instance
-{
-    my ($self, $instance) = @_;
-    my $json_output = decode_json(script_output('aws ec2 describe-instances --filter Name=instance-id,Values=' . $instance->instance_id(), quiet => 1));
+sub describe_instance {
+    my ($self, $instance_id) = @_;
+    my $json_output = decode_json(script_output('aws ec2 describe-instances --filter Name=instance-id,Values=' . $instance_id, quiet => 1));
     my $i_desc = $json_output->{Reservations}->[0]->{Instances}->[0];
     return $i_desc;
 }
 
-sub get_state_from_instance
-{
+sub get_state_from_instance {
     my ($self, $instance) = @_;
-    return $self->describe_instance($instance)->{State}->{Name};
+    my $instance_id = $instance->instance_id();
+    return $self->describe_instance($instance_id)->{State}->{Name};
 }
 
-sub get_ip_from_instance
-{
-    my ($self, $instance) = @_;
-    return $self->describe_instance($instance)->{PublicIpAddress};
+sub get_public_ip {
+    my ($self) = @_;
+    my $instance_id = $self->get_terraform_output('.vm_name.value[]');
+    return $self->describe_instance($instance_id)->{PublicIpAddress};
 }
 
 sub stop_instance
@@ -277,7 +232,7 @@ sub stop_instance
     my $instance_id = $instance->instance_id();
     my $attempts = 60;
 
-    die("Outdated instance object") if ($instance->public_ip ne $self->get_ip_from_instance($instance));
+    die("Outdated instance object") if ($instance->public_ip ne $self->get_public_ip());
 
     assert_script_run('aws ec2 stop-instances --instance-ids ' . $instance_id, quiet => 1);
 
@@ -293,26 +248,25 @@ sub start_instance
     my $attempts = 60;
     my $instance_id = $instance->instance_id();
 
-    my $i_desc = $self->describe_instance($instance);
+    my $i_desc = $self->describe_instance($instance_id);
     die("Try to start a running instance") if ($i_desc->{State}->{Name} ne 'stopped');
 
     assert_script_run("aws ec2 start-instances --instance-ids $instance_id", quiet => 1);
     sleep 1;    # give some time to update public_ip
     my $public_ip;
     while (!defined($public_ip) && $attempts-- > 0) {
-        $public_ip = $self->get_ip_from_instance($instance);
+        $public_ip = $self->get_public_ip();
     }
     die("Unable to get new public IP") unless ($public_ip);
     $instance->public_ip($public_ip);
 }
 
-sub change_instance_type
-{
+sub change_instance_type {
     my ($self, $instance, $instance_type) = @_;
-    die "Instance type is already $instance_type" if ($self->describe_instance($instance)->{InstanceType} eq $instance_type);
     my $instance_id = $instance->instance_id();
+    die "Instance type is already $instance_type" if ($self->describe_instance($instance_id)->{InstanceType} eq $instance_type);
     assert_script_run("aws ec2 modify-instance-attribute --instance-id $instance_id --instance-type '{\"Value\": \"$instance_type\"}'");
-    die "Failed to change instance type to $instance_type" if ($self->describe_instance($instance)->{InstanceType} ne $instance_type);
+    die "Failed to change instance type to $instance_type" if ($self->describe_instance($instance_id)->{InstanceType} ne $instance_type);
 }
 
 sub query_metadata {

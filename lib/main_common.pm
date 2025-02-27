@@ -646,7 +646,7 @@ sub load_jeos_tests {
     loadtest "jeos/record_machine_id";
     loadtest "console/force_scheduled_tasks";
     # this test case also disables grub timeout
-    loadtest "jeos/grub2_gfxmode" unless is_bootloader_sdboot;
+    loadtest "jeos/grub2_gfxmode" unless (is_bootloader_sdboot || is_bootloader_grub2_bls);
     unless (get_var('INSTALL_LTP') || get_var('SYSTEMD_TESTSUITE')) {
         # jeos/diskusage as of now works only with BTRFS
         loadtest "jeos/diskusage" if get_var('FILESYSTEM', 'btrfs') =~ /btrfs/;
@@ -1266,7 +1266,7 @@ sub load_consoletests {
     loadtest "console/zypper_log";
     if (!get_var("LIVETEST")) {
         loadtest "console/yast2_i" unless (is_sle("16+") || is_leap("16.0+"));
-        loadtest "console/yast2_bootloader" unless ((is_sle("16+") || is_leap("16.0+")) || is_bootloader_sdboot);
+        loadtest "console/yast2_bootloader" unless ((is_sle("16+") || is_leap("16.0+")) || is_bootloader_sdboot || is_bootloader_grub2_bls);
     }
     loadtest "console/vim" if is_opensuse || is_sle('<15') || !get_var('PATTERNS') || check_var_array('PATTERNS', 'enhanced_base');
     # textmode install comes without firewall by default atm on openSUSE.
@@ -1709,7 +1709,7 @@ sub load_extra_tests_console {
             loadtest "console/wavpack";
         }
     }
-    loadtest "console/libvorbis";
+    loadtest "console/libvorbis" unless (is_sle("16+"));
     loadtest "console/command_not_found";
     if (is_sle('12-sp2+')) {
         loadtest 'console/openssl_alpn';
@@ -1781,7 +1781,7 @@ sub load_extra_tests_console {
     loadtest 'console/wpa_supplicant' unless (!is_x86_64 || is_sle('<15') || is_leap('<15.1') || is_jeos || is_public_cloud);
     loadtest 'console/python_scientific' unless (is_sle("<15"));
     loadtest "console/parsec" if is_tumbleweed;
-    loadtest "console/perl_bootloader" unless (is_public_cloud() || is_bootloader_sdboot);
+    loadtest "console/perl_bootloader" unless (is_public_cloud() || is_bootloader_sdboot || is_bootloader_grub2_bls);
 }
 
 sub load_extra_tests_sdk {
@@ -1846,17 +1846,17 @@ sub load_extra_tests_filesystem {
         loadtest 'console/snapper_create';
         # Needs zsh, not available in staging
         loadtest "console/snapper_jeos_cli" if is_jeos && !is_staging;
+        loadtest "console/btrfsmaintenance";
         loadtest "console/btrfs_autocompletion";
         if (get_var("NUMDISKS", 0) > 1) {
             loadtest "console/btrfs_qgroups";
-            if (check_var('DISTRI', 'opensuse') || is_sle('12-sp2+')) {
-                loadtest 'console/snapper_cleanup';
-            }
             if (is_sle '12-sp2+') {
                 loadtest "console/btrfs_send_receive";
             }
+            if (check_var('DISTRI', 'opensuse') || is_sle('12-sp2+')) {
+                loadtest 'console/snapper_cleanup';
+            }
         }
-        loadtest "console/btrfsmaintenance";
     }
     if (get_var('NUMDISKS', 0) > 1 && (is_sle('12-sp3+') || is_leap('42.3+') || is_tumbleweed)) {
         # On JeOS we use kernel-defaul-base and it does not have 'dm-thin-pool'

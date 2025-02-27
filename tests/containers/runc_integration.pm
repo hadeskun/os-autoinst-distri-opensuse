@@ -15,8 +15,7 @@ use containers::common;
 use containers::bats;
 use version_utils qw(is_sle is_tumbleweed);
 
-my $test_dir = "/var/tmp";
-my $runc_version = "";
+my $test_dir = "/var/tmp/runc-tests";
 
 sub run_tests {
     my %params = @_;
@@ -26,8 +25,10 @@ sub run_tests {
 
     my $log_file = "runc-" . ($rootless ? "user" : "root") . ".tap";
 
+    my $tmp_dir = script_output "mktemp -d -p /var/tmp test.XXXXXX";
+
     my %_env = (
-        BATS_TMPDIR => "/var/tmp",
+        BATS_TMPDIR => $tmp_dir,
         RUNC_USE_SYSTEMD => "1",
         RUNC => "/usr/bin/runc",
     );
@@ -39,6 +40,8 @@ sub run_tests {
     my @skip_tests = split(/\s+/, get_var('RUNC_BATS_SKIP', '') . " " . $skip_tests);
     patch_logfile($log_file, @skip_tests);
     parse_extra_log(TAP => $log_file);
+
+    script_run "rm -rf $tmp_dir";
 
     return ($ret);
 }
@@ -63,12 +66,12 @@ sub run {
 
     switch_to_user;
 
-    assert_script_run "cd $test_dir";
-
     # Download runc sources
-    $runc_version = script_output "runc --version  | awk '{ print \$3 }'";
-    script_retry("curl -sL https://github.com/opencontainers/runc/archive/refs/tags/v$runc_version.tar.gz | tar -zxf -", retry => 5, delay => 60, timeout => 300);
-    assert_script_run "cd $test_dir/runc-$runc_version/";
+    my $runc_version = script_output "runc --version  | awk '{ print \$3 }'";
+    my $url = get_var("RUNC_BATS_URL", "https://github.com/opencontainers/runc/archive/refs/tags/v$runc_version.tar.gz");
+    assert_script_run "mkdir -p $test_dir";
+    assert_script_run "cd $test_dir";
+    script_retry("curl -sL $url | tar -zxf - --strip-components 1", retry => 5, delay => 60, timeout => 300);
 
     # Compile helpers used by the tests
     my $cmds = script_output "find contrib/cmd tests/cmd -mindepth 1 -maxdepth 1 -type d -printf '%f ' || true";
@@ -77,28 +80,22 @@ sub run {
     my $errors = run_tests(rootless => 1, skip_tests => get_var('RUNC_BATS_SKIP_USER', ''));
 
     select_serial_terminal;
-    assert_script_run("cd $test_dir/runc-$runc_version/");
+    assert_script_run("cd $test_dir");
 
     $errors += run_tests(rootless => 0, skip_tests => get_var('RUNC_BATS_SKIP_ROOT', ''));
 
     die "Tests failed" if ($errors);
 }
 
-sub cleanup() {
-    assert_script_run "cd ~";
-    script_run("rm -rf $test_dir/runc-$runc_version/");
-    bats_post_hook;
-}
-
 sub post_fail_hook {
     my ($self) = @_;
-    cleanup();
+    bats_post_hook $test_dir;
     $self->SUPER::post_fail_hook;
 }
 
 sub post_run_hook {
     my ($self) = @_;
-    cleanup();
+    bats_post_hook $test_dir;
     $self->SUPER::post_run_hook;
 }
 

@@ -23,6 +23,8 @@ use Utils::Architectures 'is_aarch64';
 use Utils::Logging 'save_and_upload_log';
 use bootloader_setup 'add_grub_cmdline_settings';
 use power_action_utils 'power_action';
+use List::MoreUtils qw(uniq);
+use containers::common qw(install_packages);
 
 our @EXPORT = qw(
   bats_post_hook
@@ -30,7 +32,9 @@ our @EXPORT = qw(
   enable_modules
   install_bats
   install_ncat
+  install_oci_runtime
   patch_logfile
+  selinux_hack
   switch_to_user
 );
 
@@ -70,9 +74,19 @@ sub install_bats {
 
     script_run "mkdir -m 0750 /etc/sudoers.d/";
     assert_script_run "echo 'Defaults secure_path=\"/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/bin\"' > /etc/sudoers.d/usrlocal";
+    assert_script_run "echo '$testapi::username ALL=(ALL:ALL) NOPASSWD: ALL' > /etc/sudoers.d/nopasswd";
 
     assert_script_run "curl -o /usr/local/bin/bats_skip_notok " . data_url("containers/bats_skip_notok.py");
     assert_script_run "chmod +x /usr/local/bin/bats_skip_notok";
+}
+
+sub install_oci_runtime {
+    my $oci_runtime = get_var("OCI_RUNTIME", script_output("podman info --format '{{ .Host.OCIRuntime.Name }}'"));
+    install_packages($oci_runtime);
+    script_run "mkdir /etc/containers/containers.conf.d";
+    assert_script_run "echo -e '[engine]\nruntime=\"$oci_runtime\"' >> /etc/containers/containers.conf.d/engine.conf";
+    record_info("OCI runtime", $oci_runtime);
+    return $oci_runtime;
 }
 
 sub get_user_subuid {
@@ -125,6 +139,8 @@ sub enable_modules {
 sub patch_logfile {
     my ($log_file, @skip_tests) = @_;
 
+    @skip_tests = uniq sort @skip_tests;
+
     foreach my $test (@skip_tests) {
         next if ($test eq "none");
         if (script_run("grep -q 'in test file.*/$test.bats' $log_file") != 0) {
@@ -135,7 +151,7 @@ sub patch_logfile {
 }
 
 sub fix_tmp {
-    my $override_conf = << 'EOF';
+    my $override_conf = <<'EOF';
 [Unit]
 ConditionPathExists=/var/tmp
 
@@ -155,40 +171,67 @@ sub bats_setup {
     my $reboot_needed = 0;
 
     delegate_controllers;
+
     # Remove mounts.conf
     script_run "rm -vf /etc/containers/mounts.conf /usr/share/containers/mounts.conf";
+
     # Disable tmpfs from next boot
-    if (script_output("findmnt -no FSTYPE /tmp") =~ /tmpfs/) {
+    if (script_output("findmnt -no FSTYPE /tmp", proceed_on_failure => 1) =~ /tmpfs/) {
         # Bind mount /tmp to /var/tmp
         fix_tmp;
         $reboot_needed = 1;
     }
+
     # Switch to cgroup v2 if not already active
     if (script_run("test -f /sys/fs/cgroup/cgroup.controllers") != 0) {
         add_grub_cmdline_settings("systemd.unified_cgroup_hierarchy=1", update_grub => 1);
         $reboot_needed = 1;
     }
+
     if ($reboot_needed) {
         power_action('reboot', textmode => 1);
         $self->wait_boot();
     }
+
     select_serial_terminal;
+
+    assert_script_run "mount --make-rshared /tmp" if (script_run("findmnt -no FSTYPE /tmp") == 0);
+}
+
+sub selinux_hack {
+    my $dir = shift;
+
+    # Use the same labeling in /var/lib/containers for $dir
+    # https://github.com/containers/podman/blob/main/troubleshooting.md#11-changing-the-location-of-the-graphroot-leads-to-permission-denied
+    script_run "sudo semanage fcontext -a -e /var/lib/containers $dir";
+    script_run "sudo restorecon -R -v $dir";
 }
 
 sub bats_post_hook {
+    my $test_dir = shift;
+
     select_serial_terminal;
 
-    script_run('df -h > /tmp/df-h.txt');
-    upload_logs('/tmp/df-h.txt');
+    my $log_dir = "/tmp/logs/";
+    assert_script_run "mkdir -p $log_dir";
+    assert_script_run "cd $log_dir";
 
-    script_run('dmesg > /tmp/dmesg.txt');
-    upload_logs('/tmp/dmesg.txt');
+    script_run "rm -rf $test_dir";
 
-    script_run('rpm -qa | sort > /tmp/rpm-qa.txt');
-    upload_logs('/tmp/rpm-qa.txt');
+    script_run('df -h > df-h.txt');
+    script_run('dmesg > dmesg.txt');
+    script_run('findmnt > findmnt.txt');
+    script_run('rpm -qa | sort > rpm-qa.txt');
+    script_run('systemctl > systemctl.txt');
+    script_run('systemctl status > systemctl-status.txt');
+    script_run('systemctl list-unit-files > systemctl_units.txt');
+    script_run('journalctl -b > journalctl-b.txt', timeout => 120);
+    script_run('tar zcf containers-conf.tgz $(find /etc/containers /usr/share/containers -type f)');
 
-    script_run('journalctl -b > /tmp/journalctl-b.txt', timeout => 120);
-    upload_logs('/tmp/journalctl-b.txt');
+    my @logs = split /\s+/, script_output "ls";
+    for my $log (@logs) {
+        upload_logs($log_dir . $log);
+    }
 
     upload_logs('/var/log/audit/audit.log', log_name => "audit.txt");
 }
