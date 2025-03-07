@@ -29,8 +29,7 @@ sub run {
         zypper_call 'in open-iscsi';
     }
 
-    my $iscsi_client = script_output("rpm -qa open-iscsi");
-    record_info('iscsi_client version', $iscsi_client);
+    record_info('iscsi_client version', script_output('rpm -q open-iscsi'));
 
     assert_script_run("systemctl start iscsid");
     my $iscsi_daemon_status = script_output("systemctl status iscsid");
