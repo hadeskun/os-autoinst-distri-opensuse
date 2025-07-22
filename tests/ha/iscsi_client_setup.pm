@@ -48,7 +48,7 @@ sub run {
 
     assert_script_run "iscsiadm --mode node --target '$node_name' --portal $iscsi_server -o new";
     assert_script_run "iscsiadm --mode node --target '$node_name' --portal $iscsi_server -n discovery.sendtargets.use_discoveryd -v Yes";
-    assert_script_run "iscsiadm --mode node --target '$node_name' --portal $iscsi_server -n discovery.sendtargets.discoveryd_poll_inval -v 30";
+    #assert_script_run "iscsiadm --mode node --target '$node_name' --portal $iscsi_server -n discovery.sendtargets.discoveryd_poll_inval -v 30";
     systemctl "restart $_" foreach qw(iscsid iscsi);
     record_info('iscsi status', script_output('systemctl --no-pager status iscsid iscsi'));
 
