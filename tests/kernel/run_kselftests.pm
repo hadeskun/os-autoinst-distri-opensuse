@@ -18,6 +18,7 @@
 use base 'opensusebasetest';
 
 use testapi;
+use utils qw(write_sut_file);
 use serial_terminal 'select_serial_terminal';
 use Kselftests::utils;
 
@@ -69,10 +70,21 @@ sub run {
     }
 
     validate_kconfig($collection);
-    assert_script_run("./run_kselftest.sh --per-test-log $timeout $tests | tee summary.tap", 7200);
 
-    my $ret = post_process($collection, @tests);
-    if ($ret) {
+    my ($ktap, $softfails, $hardfails);
+    my $runner = '';
+    if ($runner = get_var('KSELFTEST_RUNNER')) {
+        script_run("$runner > summary.tap 2>&1", 7200);
+        ($ktap, $softfails, $hardfails) = post_process_single(collection => $collection, test => $tests[0]);
+    } else {
+        assert_script_run("./run_kselftest.sh --per-test-log $timeout $tests | tee summary.tap", 7200);
+        ($ktap, $softfails, $hardfails) = post_process(collection => $collection, tests => \@tests);
+    }
+
+    write_sut_file('/tmp/kselftest.tap.txt', join("\n", @{$ktap}));
+    parse_extra_log(KTAP => '/tmp/kselftest.tap.txt');
+
+    if ($softfails > 0 && $hardfails == 0) {
         $self->{result} = 'softfail';
     }
 }
