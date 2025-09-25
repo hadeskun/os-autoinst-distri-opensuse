@@ -1,0 +1,6 @@
+---
+name: sles4sap_cloud_crash
+description: |
+  crash scenario with one machine for aws
+schedule:
+    - sles4sap/crash/amazon/crash_deploy
