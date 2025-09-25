@@ -27,7 +27,6 @@ use File::Basename;
 use Utils::Architectures;
 
 our @EXPORT = qw(
-  bats_patches
   bats_post_hook
   bats_setup
   bats_tests
@@ -105,7 +104,7 @@ sub install_bats {
 
     run_command "curl $curl_opts https://github.com/bats-core/bats-core/archive/refs/tags/v$bats_version.tar.gz | tar -zxf -";
     run_command "bash bats-core-$bats_version/install.sh /usr/local";
-    run_command "rm -rf bats-core-$bats_version";
+    script_run("rm -rf bats-core-$bats_version", proceed_on_failure => 1);
 
     run_command "mkdir -pm 0750 /etc/sudoers.d/";
     run_command "echo 'Defaults secure_path=\"/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/bin\"' > /etc/sudoers.d/usrlocal";
@@ -113,6 +112,8 @@ sub install_bats {
 
     assert_script_run "curl -o /usr/local/bin/bats_skip_notok " . data_url("containers/bats/skip_notok.py");
     assert_script_run "chmod +x /usr/local/bin/bats_skip_notok";
+    assert_script_run "curl -o /usr/local/bin/patch_junit " . data_url("containers/patch_junit.py");
+    assert_script_run "chmod +x /usr/local/bin/patch_junit";
 }
 
 sub configure_oci_runtime {
@@ -172,7 +173,7 @@ sub enable_modules {
 }
 
 sub patch_logfile {
-    my ($log_file, @skip_tests) = @_;
+    my ($log_file, $xmlfile, @skip_tests) = @_;
 
     my $package = get_required_var("BATS_PACKAGE");
 
@@ -180,20 +181,13 @@ sub patch_logfile {
 
     @skip_tests = uniq sort @skip_tests;
 
-    foreach my $test (@skip_tests) {
-        next if (!$test);
-        my $exp = "-e 'in test file.*/$test.bats'";
-        # Sometimes bats lack the line above in podman remote tests
-        # so we have to fetch the test number with another regexp
-        if ($package eq "podman") {
-            my ($number) = $test =~ /^(\d+)/;
-            $exp .= " -e '^not ok [0-9]+ \\[$number\\]'";
-        }
-        if (script_run("grep -qE $exp $log_file") != 0) {
-            record_info("PASS", $test);
-        }
+    my $skip_tests = join(' ', map { "\"$_\"" } @skip_tests);
+    assert_script_run "bats_skip_notok $log_file $skip_tests" if (@skip_tests);
+    # We must unconditionally call patch_junit to prefix suitename when needed
+    my @passed = split /\n/, script_output "patch_junit $xmlfile $skip_tests";
+    foreach my $pass (@passed) {
+        record_info("PASS", $pass);
     }
-    assert_script_run "bats_skip_notok $log_file " . join(' ', @skip_tests) if (@skip_tests);
 }
 
 # /tmp as tmpfs has multiple issues: it can't store SELinux labels, consumes RAM and doesn't have enough space
@@ -434,22 +428,23 @@ sub bats_tests {
     script_run "mv report.xml $xmlfile";
 
     unless (get_var("BATS_TESTS")) {
-        $skip_tests = get_var($skip_tests, $settings->{$skip_tests});
-        my @skip_tests = split(/\s+/, join(' ', get_var('BATS_IGNORE', $settings->{BATS_IGNORE}), $skip_tests));
-        patch_logfile($log_file, @skip_tests);
+        my @skip_tests = ();
+        push @skip_tests, @{$settings->{$skip_tests}} if ($settings->{$skip_tests});
+        push @skip_tests, @{$settings->{BATS_IGNORE}} if ($settings->{BATS_IGNORE});
+        patch_logfile($log_file, $xmlfile, @skip_tests);
     }
 
-    parse_extra_log(TAP => $log_file);
-    upload_logs($xmlfile);
+    parse_extra_log(XUnit => $xmlfile);
+    upload_logs($log_file);
 
-    run_command "sudo rm -rf $tmp_dir || true";
+    script_run("sudo rm -rf $tmp_dir", timeout => 300, proceed_on_failure => 1);
 
     return ($ret);
 }
 
 sub bats_settings {
+    my $package = shift;
     my $os_version = get_required_var("DISTRI") . "-" . get_required_var("VERSION");
-    my $package = get_required_var("BATS_PACKAGE");
 
     assert_script_run "curl -o /tmp/skip.yaml " . data_url("containers/bats/skip.yaml");
     my $text = script_output("cat /tmp/skip.yaml", quiet => 1);
@@ -458,18 +453,14 @@ sub bats_settings {
     return $yaml->{$package}{$os_version};
 }
 
-sub bats_patches {
-    $settings = bats_settings;
+sub patch_sources {
+    my ($package, $branch, $tests_dir) = @_;
+
+    $settings = bats_settings $package;
     my @patches = split(/\s+/, get_var("GITHUB_PATCHES", ""));
     if (!@patches && defined $settings->{GITHUB_PATCHES}) {
         @patches = @{$settings->{GITHUB_PATCHES}};
     }
-    return \@patches;
-}
-
-sub patch_sources {
-    my ($package, $branch, $tests_dir, $patches) = @_;
-    my @patches = @{$patches};
 
     my $github_org = "containers";
     if ($package eq "runc") {
@@ -490,6 +481,7 @@ sub patch_sources {
         $branch = $repo;
     }
 
+    $test_dir = "/var/tmp/";
     run_command "cd $test_dir";
     run_command "git clone https://github.com/$github_org/$package.git", timeout => 300;
     $test_dir .= $package;

@@ -19,19 +19,22 @@ aardvark-dns:
     - 519
     - 581
     - 623
-    BATS_IGNORE: 100-basic-name-resolution
+    BATS_IGNORE:
+    - "100-basic-name-resolution.bats::basic container - dns itself on container with ipaddress v6"
   sle-15-SP6:
     GITHUB_PATCHES:
     - 519
     - 581
     - 623
-    BATS_IGNORE: 100-basic-name-resolution
+    BATS_IGNORE:
+    - "100-basic-name-resolution.bats::basic container - dns itself on container with ipaddress v6"
   sle-15-SP5:
     GITHUB_PATCHES:
     - 519
     - 581
     - 623
-    BATS_IGNORE: 100-basic-name-resolution
+    BATS_IGNORE:
+    - "100-basic-name-resolution.bats::basic container - dns itself on container with ipaddress v6"
 buildah:
   # Note on patches:
   # https://github.com/containers/buildah/pull/5495 is needed to skip nixery.dev registry
@@ -47,36 +50,67 @@ buildah:
     GITHUB_PATCHES:
     - 6226
     BATS_IGNORE:
-    BATS_IGNORE_ROOT: bud
+    BATS_IGNORE_ROOT:
+    - "bud.bats::bud with --cgroup-parent"
     BATS_IGNORE_USER:
   sle-15-SP7:
     GITHUB_PATCHES:
     - 5495
     - 6226
     BATS_IGNORE:
-    BATS_IGNORE_ROOT: bud run
+    BATS_IGNORE_ROOT:
+    - "bud.bats::bud-git-context"
+    - "bud.bats::bud-git-context-subdirectory"
+    - "bud.bats::bud using gitrepo and branch"
+    - "bud.bats::bud with --cgroup-parent"
+    - "run.bats::Check if containers run with correct open files/processes limits"
     BATS_IGNORE_USER:
   sle-15-SP6:
     GITHUB_PATCHES:
     - 5495
     - 6226
     BATS_IGNORE:
-    BATS_IGNORE_ROOT: bud run
+    BATS_IGNORE_ROOT:
+    - "bud.bats::bud-git-context"
+    - "bud.bats::bud-git-context-subdirectory"
+    - "bud.bats::bud using gitrepo and branch"
+    - "bud.bats::bud with --cgroup-parent"
+    - "run.bats::Check if containers run with correct open files/processes limits"
     BATS_IGNORE_USER:
   sle-15-SP5:
     GITHUB_PATCHES:
     - 5495
     - 6226
-    BATS_IGNORE: bud
-    BATS_IGNORE_ROOT: run
+    BATS_IGNORE:
+    - "bud.bats::bud-multiple-platform-no-partial-manifest-list"
+    BATS_IGNORE_ROOT:
+    - "bud.bats::bud using gitrepo and branch"
+    - "bud.bats::bud with --cgroup-parent"
+    - "bud.bats::bud-git-context"
+    - "bud.bats::bud-git-context-subdirectory"
+    - "run.bats::Check if containers run with correct open files/processes limits"
     BATS_IGNORE_USER:
   sle-15-SP4:
     GITHUB_PATCHES:
     - 5495
     - 6226
-    BATS_IGNORE: bud
-    BATS_IGNORE_ROOT: run
+    BATS_IGNORE:
+    - "bud.bats::bud-multiple-platform-no-partial-manifest-list"
+    BATS_IGNORE_ROOT:
+    - "bud.bats::bud using gitrepo and branch"
+    - "bud.bats::bud with --cgroup-parent"
+    - "bud.bats::bud-git-context"
+    - "bud.bats::bud-git-context-subdirectory"
+    - "run.bats::Check if containers run with correct open files/processes limits"
     BATS_IGNORE_USER:
+compose:
+  # Note on patches:
+  # https://github.com/docker/compose/pull/13214 - test: Set stop_signal to SIGTERM
+  opensuse-Tumbleweed:
+    GITHUB_PATCHES:
+  sle-16.0:
+    GITHUB_PATCHES:
+    - 13214
 conmon:
   # Note on patches:
   # https://github.com/containers/conmon/pull/579 is needed to enable tests
@@ -92,6 +126,29 @@ conmon:
     BATS_IGNORE:
     BATS_IGNORE_ROOT:
     BATS_IGNORE_USER:
+docker-py:
+  # Note on patches:
+  # https://github.com/docker/docker-py/pull/3199 - Bump default API version to 1.43 (Moby 24.0)
+  # https://github.com/docker/docker-py/pull/3203 - integration/commit: Don't check for deprecated fields
+  # https://github.com/docker/docker-py/pull/3206 - Update Ruff, fix some minor issues
+  # https://github.com/docker/docker-py/pull/3231 - Bump default API version to 1.44 (Moby 25.0)
+  # https://github.com/docker/docker-py/pull/3290 - tests/exec: expect 127 exit code for missing executable
+  # https://github.com/docker/docker-py/pull/3354 - tests: Fix deprecation warning for utcfromtimestamp()
+  opensuse-Tumbleweed:
+    GITHUB_PATCHES:
+    - 3290
+    - 3354
+  sle-16.0:
+    GITHUB_PATCHES:
+    - 3290
+    - 3354
+  sle-15-SP7:
+    GITHUB_PATCHES:
+    - 3199
+    - 3203
+    - 3206
+    - 3231
+    - 3290
 netavark:
   # Note on patches:
   # https://github.com/containers/netavark/pull/1191 is needed for 001-basic
@@ -104,15 +161,21 @@ netavark:
   sle-15-SP7:
     GITHUB_PATCHES:
     - 1191
-    BATS_IGNORE: 200-bridge-firewalld 250-bridge-nftables
+    BATS_IGNORE:
+    - "200-bridge-firewalld.bats"
+    - "250-bridge-nftables.bats"
   sle-15-SP6:
     GITHUB_PATCHES:
     - 1191
-    BATS_IGNORE: 200-bridge-firewalld 250-bridge-nftables
+    BATS_IGNORE:
+    - "200-bridge-firewalld.bats"
+    - "250-bridge-nftables.bats"
   sle-15-SP5:
     GITHUB_PATCHES:
     - 1191
-    BATS_IGNORE: 200-bridge-firewalld 250-bridge-nftables
+    BATS_IGNORE:
+    - "200-bridge-firewalld.bats"
+    - "250-bridge-nftables.bats"
 podman:
   # Note on patches:
   # https://github.com/containers/podman/pull/21875 is needed for 060-mount
@@ -124,17 +187,22 @@ podman:
   # https://github.com/containers/podman/pull/26017 is needed for 030-run
   # https://github.com/containers/podman/pull/26798 is needed for 505-networking-pasta
   # https://github.com/containers/podman/pull/26920 is needed to drop ncat
+  # https://github.com/containers/podman/pull/27152 is needed for 030-run
   opensuse-Tumbleweed:
     GITHUB_PATCHES:
     - 26017
     - 26798
     - 26920
     - 26921
+    - 27152
     BATS_IGNORE:
-    BATS_IGNORE_ROOT_LOCAL: 200-pod
+    BATS_IGNORE_ROOT_LOCAL:
+    - "200-pod.bats::pod resource limits"
     BATS_IGNORE_ROOT_REMOTE:
-    BATS_IGNORE_USER_LOCAL: 252-quadlet
-    BATS_IGNORE_USER_REMOTE: 130-kill
+    BATS_IGNORE_USER_LOCAL:
+    - "252-quadlet.bats::quadlet kube - start error"
+    BATS_IGNORE_USER_REMOTE:
+    - "130-kill.bats::podman kill - print IDs or raw input"
   sle-16.0:
     GITHUB_PATCHES:
     - 25792
@@ -146,10 +214,12 @@ podman:
     - 26920
     - 26921
     BATS_IGNORE:
-    BATS_IGNORE_ROOT_LOCAL: 200-pod
+    BATS_IGNORE_ROOT_LOCAL:
+    - "200-pod.bats::pod resource limits"
     BATS_IGNORE_ROOT_REMOTE:
     BATS_IGNORE_USER_LOCAL:
-    BATS_IGNORE_USER_REMOTE: 130-kill
+    BATS_IGNORE_USER_REMOTE:
+    - "130-kill.bats::podman kill - print IDs or raw input"
   sle-15-SP7:
     GITHUB_PATCHES:
     - 21875
@@ -174,6 +244,14 @@ podman:
     BATS_IGNORE_ROOT_REMOTE:
     BATS_IGNORE_USER_LOCAL:
     BATS_IGNORE_USER_REMOTE:
+podman-py:
+  # Note on patches:
+  # https://github.com/containers/podman-py/pull/572 - tests: Fix tests to reflect removal of rw as default option
+  # https://github.com/containers/podman-py/pull/575 - tests: Fix deprecation warning for utcfromtimestamp()
+  opensuse-Tumbleweed:
+    GITHUB_PATCHES:
+    - 572
+    - 575
 runc:
   # Note on patches:
   # https://github.com/opencontainers/runc/pull/4825 is needed for cgroups
@@ -196,25 +274,33 @@ runc:
     - 4825
     BATS_IGNORE:
     BATS_IGNORE_ROOT:
-    BATS_IGNORE_USER: run userns
+    BATS_IGNORE_USER:
+    - "run.bats::runc run [joining existing container namespaces]"
+    - "userns.bats::userns join other container userns"
   sle-15-SP6:
     GITHUB_PATCHES:
     - 4825
     BATS_IGNORE:
     BATS_IGNORE_ROOT:
-    BATS_IGNORE_USER: run userns
+    BATS_IGNORE_USER:
+    - "run.bats::runc run [joining existing container namespaces]"
+    - "userns.bats::userns join other container userns"
   sle-15-SP5:
     GITHUB_PATCHES:
     - 4825
     BATS_IGNORE:
     BATS_IGNORE_ROOT:
-    BATS_IGNORE_USER: run userns
+    BATS_IGNORE_USER:
+    - "run.bats::runc run [joining existing container namespaces]"
+    - "userns.bats::userns join other container userns"
   sle-15-SP4:
     GITHUB_PATCHES:
     - 4825
     BATS_IGNORE:
     BATS_IGNORE_ROOT:
-    BATS_IGNORE_USER: run userns
+    BATS_IGNORE_USER:
+    - "run.bats::runc run [joining existing container namespaces]"
+    - "userns.bats::userns join other container userns"
 skopeo:
   opensuse-Tumbleweed:
     BATS_IGNORE:

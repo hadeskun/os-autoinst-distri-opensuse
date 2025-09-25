@@ -184,10 +184,6 @@ sub load_host_tests_podman {
     load_compose_tests($run_args);
     loadtest('containers/seccomp', run_args => $run_args, name => $run_args->{runtime} . "_seccomp") unless is_sle('<15');
     loadtest('containers/isolation', run_args => $run_args, name => $run_args->{runtime} . "_isolation") unless (is_public_cloud || is_transactional);
-    # python3-podman is not available on SLES - https://bugzilla.suse.com/show_bug.cgi?id=1248415
-    unless (is_jeos || is_public_cloud || is_staging || is_transactional || get_var("OCI_RUNTIME")) {
-        loadtest('containers/python_runtime', run_args => $run_args, name => "python_podman") if (is_tumbleweed && (is_aarch64 || is_x86_64));
-    }
     loadtest('containers/podmansh') if (is_tumbleweed && !is_staging && !is_transactional);
 }
 
@@ -219,9 +215,6 @@ sub load_host_tests_docker {
     if (is_tumbleweed || is_leap || is_sle && (is_sle('>=16') || is_sle('>=15-SP4') && !check_var("CONTAINERS_DOCKER_FLAVOUR", "stable"))) {
         # select_user_serial_terminal is broken on public cloud
         loadtest 'containers/rootless_docker' unless (is_public_cloud);
-    }
-    unless (is_jeos || is_public_cloud || is_staging || is_transactional || check_var("CONTAINERS_DOCKER_FLAVOUR", "stable")) {
-        loadtest('containers/python_runtime', run_args => $run_args, name => "python_docker") if ((is_tumbleweed || is_sle(">=16")) && (is_aarch64 || is_x86_64));
     }
     # Expected to work anywhere except of real HW backends, PC and Micro
     unless (is_generalhw || is_ipmi || is_public_cloud || is_openstack || is_sle_micro || is_microos || is_leap_micro || (is_sle('=12-SP5') && is_aarch64)) {
@@ -312,13 +305,13 @@ sub load_helm_chart_tests {
     );
 
     loadtest 'containers/scc_login_to_registry' if (is_sle() && $spr_credentials_defined);
+    my $host_version = get_var("HOST_VERSION", get_required_var("VERSION"));    # VERSION is the version of the container, not the host.
     if ($chart =~ m/rmt-helm$/) {
-        loadtest 'containers/charts/rmt';
+        loadtest 'containers/charts/rmt' if ($host_version =~ "15-SP[4,5,6,7]|16\..*|slem-.*");
     } elsif ($chart =~ m/private-registry/) {
         loadtest 'containers/charts/privateregistry';
     } elsif ($chart =~ m/kiosk/) {
-        my $version = get_var("HOST_VERSION", get_required_var("VERSION"));    # VERSION is the version of the container, not the host.
-        loadtest 'containers/charts/kiosk_firefox' if ($version =~ "15-SP[4,5,6,7]|16\..*|slem-.*");
+        loadtest 'containers/charts/kiosk_firefox' if ($host_version =~ "15-SP[4,5,6,7]|16\..*|slem-.*");
     }
     else {
         die "Unsupported HELM_CHART value or HOST_VERSION";
@@ -341,7 +334,7 @@ sub load_container_tests {
     }
 
     if (my $container_tests = get_var('CONTAINER_TESTS', '')) {
-        loadtest "containers/$_" foreach (split('\s+', $container_tests));
+        loadtest "containers/$_" foreach (split(',\s*', $container_tests));
         return;
     }
 

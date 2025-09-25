@@ -10,7 +10,6 @@
 use Mojo::Base 'containers::basetest', -signatures;
 use testapi;
 use serial_terminal qw(select_serial_terminal);
-use version_utils;
 use utils;
 use power_action_utils 'power_action';
 use containers::common qw(install_packages);
@@ -34,9 +33,7 @@ sub setup {
     my $version = script_output "$docker_compose version | awk '{ print \$4 }'";
     record_info("version", $version);
 
-    # https://github.com/docker/compose/pull/13214 - test: Set stop_signal to SIGTERM
-    my @patches = qw(13214);
-    patch_sources "compose", "v$version", "pkg/e2e", \@patches;
+    patch_sources "compose", "v$version", "pkg/e2e";
 }
 
 
@@ -79,13 +76,11 @@ sub run {
 sub post_fail_hook {
     my ($self) = @_;
     bats_post_hook;
-    $self->SUPER::post_fail_hook;
 }
 
 sub post_run_hook {
     my ($self) = @_;
     bats_post_hook;
-    $self->SUPER::post_run_hook;
 }
 
 1;
