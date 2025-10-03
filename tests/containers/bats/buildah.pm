@@ -20,7 +20,6 @@ sub run_tests {
     return 0 if check_var($skip_tests, "all");
 
     my $storage_driver = $rootless ? "vfs" : script_output("buildah info --format '{{ .store.GraphDriverName }}'");
-    $storage_driver = get_var("BUILDAH_STORAGE_DRIVER", $storage_driver);
     record_info("storage driver", $storage_driver);
 
     my $oci_runtime = get_var('OCI_RUNTIME', script_output("buildah info --format '{{ .host.OCIRuntime }}'"));
@@ -70,10 +69,10 @@ sub run {
     my ($self) = @_;
     select_serial_terminal;
 
-    my @pkgs = qw(buildah docker git-daemon glibc-devel-static go1.24 jq libgpgme-devel libseccomp-devel make openssl podman selinux-tools);
+    my @pkgs = qw(buildah docker git-daemon glibc-devel-static go1.24 libgpgme-devel libseccomp-devel make openssl podman selinux-tools);
     push @pkgs, "qemu-linux-user" if (is_tumbleweed || is_sle('>=15-SP6'));
 
-    $self->bats_setup(@pkgs);
+    $self->setup_pkgs(@pkgs);
 
     record_info("buildah version", script_output("buildah --version"));
     record_info("buildah info", script_output("buildah info"));

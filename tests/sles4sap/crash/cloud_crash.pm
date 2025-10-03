@@ -46,8 +46,8 @@ sub run {
     my $vm_ip = get_required_var('VM_IP');
     my $cloud_provider_name = get_required_var('PUBLIC_CLOUD_PROVIDER');
     my %usernames = (
-        'AZURE' => 'cloudadmin',
-        'EC2' => 'ec2-user'
+        AZURE => 'cloudadmin',
+        EC2 => 'ec2-user'
     );
     my $username = $usernames{$cloud_provider_name} or die "Unsupported cloud provider: $cloud_provider_name";
     my $instance = publiccloud::instance->new(public_ip => $vm_ip, username => $username);

@@ -7,7 +7,7 @@
 # Summary: This tests will deploy the public cloud instance, create user,
 #   prepare ssh config and permit password login
 #
-# Maintainer: <qa-c@suse.de>
+# Maintainer: QE-C team <qa-c@suse.de>
 
 use Mojo::Base 'publiccloud::basetest';
 use publiccloud::ssh_interactive qw(select_host_console);
@@ -39,6 +39,7 @@ sub run {
     $instance_args{use_extra_disk} = {size => $additional_disk_size, type => $additional_disk_type} if ($additional_disk_size > 0);
     $args->{my_provider} = $self->provider_factory();
     $args->{my_instance} = $args->{my_provider}->create_instance(%instance_args);
+    $args->{my_instance}->wait_for_guestregister() if (is_ondemand);
     my $provider = $args->{my_provider};
     my $instance = $args->{my_instance};
 

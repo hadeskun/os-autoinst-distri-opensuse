@@ -5,7 +5,7 @@
 
 # Summary: Base helper class for public cloud
 #
-# Maintainer: Clemens Famulla-Conrad <cfamullaconrad@suse.de>
+# Maintainer: QE-C team <qa-c@suse.de>
 
 package publiccloud::provider;
 use testapi qw(is_serial_terminal :DEFAULT);
@@ -378,21 +378,16 @@ C<proceed_on_failure>  Same as timeout.
 sub create_instances {
     my ($self, %args) = @_;
     $args{check_connectivity} //= 1;
-    $args{check_guestregister} //= 1;
-    $args{upload_boot_diagnostics} //= 1;
     my @vms = $self->terraform_apply(%args);
     my $url = get_var('PUBLIC_CLOUD_PERF_DB_URI', 'http://larry.qe.suse.de:8086');
 
     foreach my $instance (@vms) {
         record_info("INSTANCE", $instance->{instance_id});
         if ($args{check_connectivity}) {
+            # An error in VM-up causes test to stop
             $instance->wait_for_ssh(timeout => $args{timeout},
                 proceed_on_failure => $args{proceed_on_failure}, scan_ssh_host_key => 1);
         }
-        # check guestregister conditional, default yes:
-        $instance->wait_for_guestregister() if ($args{check_guestregister});
-        $self->upload_boot_diagnostics() if ($args{upload_boot_diagnostics});
-
         $self->show_instance_details();
 
         # Performance data: boottime
@@ -575,7 +570,7 @@ sub terraform_apply {
     my $tf_apply_output = script_output('cat tf_apply_output', proceed_on_failure => 1);
     $self->terraform_applied(1);    # Must happen here to prevent resource leakage
 
-    record_info("TFM apply output", $tf_apply_output);
+    record_info("TFM apply output", $tf_apply_output, result => ($ret) ? 'fail' : 'ok');
     record_info("TFM apply exit code", $ret);
 
     # when all instances of certain type are booked in one AZ there is a chance that other AZ in same region still have them
@@ -595,7 +590,7 @@ sub terraform_apply {
             $ret = script_run("set -o pipefail; TF_LOG=$tf_log $runner apply -no-color -input=false myplan 2>&1 | tee tf_apply_output", timeout => $terraform_timeout);
             $tf_apply_output = script_output('cat tf_apply_output', proceed_on_failure => 1);
             record_info("TFM apply output", $tf_apply_output);
-            record_info("TFM apply exit code", $ret);
+            record_info("TFM apply exit code", $ret, result => ($ret) ? 'fail' : 'ok');
             if ($ret == 0) {
                 $self->provider_client->availability_zone($az);
                 last;
@@ -753,10 +748,11 @@ To get the complete output structure, the call is:
 sub get_terraform_output {
     my ($self, $jq_query) = @_;
     script_run("cd " . TERRAFORM_DIR);
-    my $res = script_output("$runner output -no-color -json | jq -r '$jq_query' 2>/dev/null", proceed_on_failure => 1);
+    my $res = script_output("$runner output -no-color -json | jq -Mr '$jq_query' 2>/dev/null", proceed_on_failure => 1);
     # jq 'null' shall return empty
     script_run('cd -');
     return $res unless ($res =~ /^null$/);
+    return;
 }
 
 sub escape_single_quote {

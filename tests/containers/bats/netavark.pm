@@ -29,10 +29,10 @@ sub run {
     my ($self) = @_;
     select_serial_terminal;
 
-    my @pkgs = qw(aardvark-dns cargo firewalld iproute2 jq make ncat protobuf-devel netavark);
+    my @pkgs = qw(aardvark-dns cargo firewalld iproute2 make ncat protobuf-devel netavark);
     push @pkgs, is_sle("<16") ? qw(dbus-1) : qw(dbus-1-daemon);
 
-    $self->bats_setup(@pkgs);
+    $self->setup_pkgs(@pkgs);
 
     $netavark = script_output "rpm -ql netavark | grep podman/netavark";
     record_info("netavark version", script_output("$netavark --version"));

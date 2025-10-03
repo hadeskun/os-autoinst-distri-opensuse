@@ -38,13 +38,18 @@ sub run {
     my ($self) = @_;
     select_serial_terminal;
 
-    my @pkgs = qw(apache2-utils jq openssl podman squashfs skopeo);
+    my @pkgs = qw(apache2-utils openssl podman squashfs skopeo);
     push @pkgs, "fakeroot" unless (is_sle('>=16.0') || (is_sle(">=15-SP6") && is_s390x));
 
-    $self->bats_setup(@pkgs);
+    $self->setup_pkgs(@pkgs);
+
+    # Prevent https://github.com/containers/skopeo/issues/2718
+    run_command "sed -i '/sigstore-staging:/d' /etc/containers/registries.d/default.yaml";
 
     record_info("skopeo version", script_output("skopeo --version"));
     record_info("skopeo package version", script_output("rpm -q skopeo"));
+
+    switch_to_user;
 
     # Download skopeo sources
     my $skopeo_version = script_output "skopeo --version  | awk '{ print \$3 }'";

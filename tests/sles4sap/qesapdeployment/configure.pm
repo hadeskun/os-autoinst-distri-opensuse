@@ -16,6 +16,12 @@ use sles4sap::ibsm;
 
 sub run {
     my ($self) = @_;
+    # Workaround for 'TEAM-10520 - Console redirection timing out sporadically'.
+    # Preselect 'log-console' to login earlier before doing deployment.
+    # This will avoid sporadic issue of 'backend got TERM' when doing select_console('log-console') at the first time after deployment.
+    # After deployment if 'backend got TERM' happened test case will exceed MAX_JOB_TIME and 'post_fail_hook' will not be invoked.
+    record_info('Workaround: TEAM-10520');
+    select_console('log-console');
     select_serial_terminal;
 
     # Init all the PC gears (ssh keys)
@@ -41,7 +47,6 @@ sub run {
         $variables{OS_VER} = get_var('QESAPDEPLOY_CLUSTER_OS_VER');
     }
     elsif ($provider_setting eq 'AZURE') {
-        $variables{STORAGE_ACCOUNT_NAME} = get_required_var('STORAGE_ACCOUNT_NAME');
         $variables{OS_URI} = $provider->get_blob_uri(get_required_var('PUBLIC_CLOUD_IMAGE_LOCATION'));
     }
     else
@@ -127,6 +132,7 @@ sub run {
         $variables{IBSM_VPC_NAME} = get_var('QESAPDEPLOY_IBSM_VPC_NAME', '');
         $variables{IBSM_SUBNET_NAME} = get_var('QESAPDEPLOY_IBSM_SUBNET_NAME', '');
         $variables{IBSM_SUBNET_REGION} = get_var('QESAPDEPLOY_IBSM_SUBNET_REGION', '');
+        $variables{IBSM_NCC_HUB} = get_var('QESAPDEPLOY_IBSM_NCC_HUB', '');
     }
 
     if (($provider_setting eq 'AZURE' && get_var('QESAPDEPLOY_IBSM_VNET') && get_var('QESAPDEPLOY_IBSM_RG')) ||

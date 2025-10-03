@@ -5,7 +5,7 @@
 
 # Summary: Helper class for amazon ec2
 #
-# Maintainer: Clemens Famulla-Conrad <cfamullaconrad@suse.de>, qa-c team <qa-c@suse.de>
+# Maintainer: QE-C team <qa-c@suse.de>
 
 package publiccloud::ec2;
 use Mojo::Base 'publiccloud::provider';
@@ -161,7 +161,10 @@ sub upload_boot_diagnostics {
     my ($self, %args) = @_;
     my $instance_id = $self->get_terraform_output('.vm_name.value[]');
     return if (check_var('PUBLIC_CLOUD_SLES4SAP', 1));
-
+    unless (defined($instance_id)) {
+        record_info('UNDEF. diagnostics', 'upload_boot_diagnostics: on ec2, undefined instance');
+        return;
+    }
     my $dt = DateTime->now;
     my $time = $dt->hms;
     $time =~ s/:/-/g;

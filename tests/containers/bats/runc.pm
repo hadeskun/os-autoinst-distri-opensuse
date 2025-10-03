@@ -34,10 +34,10 @@ sub run {
     my ($self) = @_;
     select_serial_terminal;
 
-    my @pkgs = qw(glibc-devel-static go1.24 jq libseccomp-devel make runc);
+    my @pkgs = qw(glibc-devel-static go1.24 libseccomp-devel make runc);
     push @pkgs, "criu" if is_tumbleweed;
 
-    $self->bats_setup(@pkgs);
+    $self->setup_pkgs(@pkgs);
 
     record_info("runc version", script_output("runc --version"));
     record_info("runc features", script_output("runc features"));

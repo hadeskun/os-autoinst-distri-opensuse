@@ -38,8 +38,12 @@ sub prepare_virtual_env {
     my $install_timeout = 600;
     my $virtualenv = 'bci/bin/activate';
     my $python = 'python3';
+    my $pip = 'pip3';
 
     record_info('Install', 'Installing needed packages');
+
+    my $should_pip_upgrade = 1;
+    my $should_create_venv = 1;
 
     if ($host_distri =~ /ubuntu/) {
         # Sometimes, the host doesn't get an IP automatically via dhcp, we need force it just in case
@@ -49,7 +53,13 @@ sub prepare_virtual_env {
         script_run('export DEBIAN_FRONTEND=noninteractive');
         script_retry("apt-get -y install python3-venv", timeout => $install_timeout);
     } elsif ($host_distri =~ /centos|rhel/) {
-        script_retry("dnf install -y --allowerasing git-core python3 jq", timeout => $install_timeout);
+        if (get_var("VERSION") =~ /mls8/) {
+            assert_script_run("dnf install -y --allowerasing git-core jq python3.11 python3.11-pip");
+            $python = 'python3.11';
+            $pip = 'pip3.11';
+        } else {
+            script_retry("dnf install -y --allowerasing git-core python3 jq", timeout => $install_timeout);
+        }
     } elsif ($host_distri =~ /micro/i) {
         # this works only for sle-micro 6.0 and 6.1
         # 6.2 is officially sles 16.0 with transactional variant
@@ -64,12 +74,21 @@ sub prepare_virtual_env {
         assert_script_run('while pgrep -f zypp; do sleep 1; done', timeout => 300);
         my $version = "$version.$sp";
         if ($version =~ /12\./) {
-            $python = 'python3.6';
+            $should_pip_upgrade = 0;
+            $should_create_venv = 0;
+            $python = 'python3.11';
+            $pip = 'pip3.11';
             @packages = ('jq');
             # PackageHub is needed for jq
             script_retry("SUSEConnect -p PackageHub/12.5/$arch", delay => 60, retry => 3, timeout => $scc_timeout);
+            zypper_call("ar -f http://download.suse.de/ibs/SUSE:/SLE-12:/Update:/Products:/SaltBundle:/Update/standard/ saltbundle");
+            zypper_call("rm python3-pip");
+            zypper_call("in saltbundlepy-base venv-salt-minion");
+            assert_script_run("mkdir -p ./bci/bin");
+            assert_script_run("ln -s /usr/lib/venv-salt-minion/bin/activate ./$virtualenv");
         } elsif ($version !~ /15\.[1-3]/) {
             $python = 'python3.11';
+            $pip = 'pip3.11';
             script_retry("SUSEConnect -p sle-module-python3/$version/$arch", delay => 60, retry => 3, timeout => $scc_timeout) unless ($host_distri =~ /opensuse/);
             push @packages, qw(git-core python311);
         }
@@ -79,10 +98,11 @@ sub prepare_virtual_env {
     }
 
     assert_script_run("$python --version");
-    assert_script_run("$python -m venv bci");
+    assert_script_run("$python -m venv bci") if $should_create_venv;
     assert_script_run("source $virtualenv");
-    assert_script_run("$python -m pip --quiet install --upgrade pip", timeout => $install_timeout);
-    assert_script_run("$python -m pip --quiet install tox", timeout => $install_timeout);
+    assert_script_run("$python -m pip --quiet install --upgrade pip", timeout => $install_timeout) if $should_pip_upgrade;
+    assert_script_run("$pip --quiet install tox", timeout => $install_timeout);
+    record_info("pip freeze", script_output("$pip freeze", timeout => $install_timeout));
     assert_script_run('deactivate');
 }
 
@@ -108,8 +128,6 @@ sub run {
     my ($version, $sp, $host_distri) = get_os_release;
 
     prepare_virtual_env($version, $sp, $host_distri) if get_var('BCI_PREPARE');
-
-    return if (get_var('HELM_CONFIG') && !($host_distri == "sles" && $version == 15 && $sp >= 3));
 
     # Ensure LTSS subscription is active when testing LTSS containers.
     validate_script_output("SUSEConnect -l", qr/.*LTSS.*Activated/, fail_message => "Host requires LTSS subscription for LTSS container") if (get_var('CONTAINER_IMAGE_TO_TEST') =~ /ltss/i);

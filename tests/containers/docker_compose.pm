@@ -11,16 +11,16 @@ use Mojo::Base 'containers::basetest', -signatures;
 use testapi;
 use serial_terminal qw(select_serial_terminal);
 use utils;
-use power_action_utils 'power_action';
 use containers::common qw(install_packages);
 use containers::bats;
 
 my $docker_compose = "/usr/lib/docker/cli-plugins/docker-compose";
+my $version;
 
 sub setup {
-    my @pkgs = qw(docker docker-compose go1.24 make);
-    install_packages(@pkgs);
-    install_git;
+    my $self = shift;
+    my @pkgs = qw(docker docker-compose jq go1.24 make);
+    $self->setup_pkgs(@pkgs);
 
     systemctl "enable docker";
     systemctl "restart docker";
@@ -30,10 +30,11 @@ sub setup {
     run_command "mkdir /root/.docker";
     run_command "touch /root/.docker/config.json";
 
-    my $version = script_output "$docker_compose version | awk '{ print \$4 }'";
-    record_info("version", $version);
+    $version = script_output "$docker_compose version | awk '{ print \$4 }'";
+    $version = "v$version";
+    record_info("docker-compose version", $version);
 
-    patch_sources "compose", "v$version", "pkg/e2e";
+    patch_sources "compose", $version, "pkg/e2e";
 }
 
 
@@ -47,9 +48,8 @@ sub test ($target) {
 
     run_command "$env make $target |& tee $target.txt || true", timeout => 3600;
 
-    # Patch the test name in the first line of the JUnit XML file so each target is parsed independently
-    assert_script_run qq{sed -ri '0,/name=/s/name="[^"]*"/name="$target"/' /tmp/report/report.xml};
     assert_script_run "mv /tmp/report/report.xml $target.xml";
+    patch_junit "docker-compose", $version, "$target.xml";
     parse_extra_log(XUnit => "$target.xml");
     upload_logs("$target.txt");
 }
@@ -58,14 +58,9 @@ sub run {
     my ($self, $args) = @_;
 
     select_serial_terminal;
-    setup;
+    $self->setup;
 
-    # Bind-mount /tmp to /var/tmp
-    mount_tmp_vartmp;
-    power_action('reboot', textmode => 1);
-    $self->wait_boot();
     select_serial_terminal;
-
     assert_script_run "cd /var/tmp/compose";
     run_command 'PATH=$PATH:/var/tmp/compose/bin/build';
 

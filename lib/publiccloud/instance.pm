@@ -5,7 +5,7 @@
 
 # Summary: Base class for public cloud instances
 #
-# Maintainer: qa-c@suse.de
+# Maintainer: QE-C team <qa-c@suse.de>
 
 package publiccloud::instance;
 use testapi;
@@ -306,7 +306,6 @@ a soft-failure will be recorded.
 If guestregister will not finish within C<timeout> seconds, job dies.
 In case of BYOS images we checking that service is inactive and quit
 Returns the time needed to wait for the guestregister to complete.
-C<wait_for_guestregister> is called inside C<create_instance()>, enabled by C<check_guestregister>
 =cut
 
 sub wait_for_guestregister {
@@ -319,21 +318,24 @@ sub wait_for_guestregister {
 
     # Check what version of registercloudguest binary we use
     $self->run_ssh_command(cmd => "rpm -qa cloud-regionsrv-client", proceed_on_failure => 1);
-    record_info('CHECK', 'guestregister check');
+    record_info('CHECK guestregister', 'guestregister check');
     while (time() - $start_time < $args{timeout}) {
         my $out = $self->run_ssh_command(cmd => 'sudo systemctl is-active guestregister', proceed_on_failure => 1, quiet => 1);
         # guestregister is expected to be inactive because it runs only once
         # the tests match the expected string at end of the cmd output
         if ($out =~ m/inactive$/) {
+            diag("guestregister inactive");
             $self->upload_log($log, log_name => $name);
             return time() - $start_time;
         }
         elsif ($out =~ m/failed$/) {
-            $self->upload_log($log, log_name => $name);
+            diag("guestregister failed");
             $out = $self->run_ssh_command(cmd => 'sudo systemctl status guestregister', quiet => 1);
+            $self->upload_log($log, log_name => $name);
             return time() - $start_time;
         }
         elsif ($out =~ m/active$/) {
+            diag("guestregister active");
             $self->upload_log($log, log_name => $name);
             die "guestregister should not be active on BYOS" if (is_byos);
         }
@@ -344,7 +346,7 @@ sub wait_for_guestregister {
         }
         sleep 1;
     }
-
+    diag("guestregister timeout");
     $self->upload_log($log, log_name => $name);
     die('guestregister didn\'t end in expected timeout=' . $args{timeout});
 }
@@ -923,8 +925,8 @@ sub upload_supportconfig_log {
     my $start = time();
     my $logs = "/var/tmp/scc_supportconfig";
     # poo#187440 Workaround applied inject newline in ssh supportconfig to prevent hang cases, while bsc#1250310 open
-    my $cmd = "printf '\\n' | timeout $timeout sudo supportconfig -R " . dirname($logs) . " -B supportconfig -x AUDIT";
-    my $err = $self->ssh_script_run(cmd => "$cmd", timeout => ($timeout + 60), proceed_on_failure => 1);
+    my $cmd = "echo | timeout $timeout sudo supportconfig -R " . dirname($logs) . " -B supportconfig -x AUDIT";
+    my $err = $self->ssh_script_run(cmd => $cmd, timeout => ($timeout + 60), proceed_on_failure => 1);
     $self->ssh_script_run(cmd => "sudo chmod 0644 $logs.txz", proceed_on_failure => 1);
     $self->upload_log("$logs.txz", failok => 1, timeout => $timeout);
     record_info('supportconfig done', ($err) ? 'Failed after ' . time() - $start . "sec." : "OK Log $logs.txz", result => ($err) ? 'fail' : 'ok');

@@ -34,7 +34,7 @@ sub run {
     select_serial_terminal;
 
     my @oci_runtimes = ();
-    my @pkgs = qw(conmon);
+    my @pkgs = qw(conmon socat);
     if (my $oci_runtime = get_var("OCI_RUNTIME")) {
         push @oci_runtimes, $oci_runtime;
     } else {
@@ -42,11 +42,13 @@ sub run {
     }
     push @pkgs, @oci_runtimes;
 
-    $self->bats_setup(@pkgs);
+    $self->setup_pkgs(@pkgs);
 
     my $conmon_version = script_output("conmon --version | awk '/version/ { print \$3 }'");
     record_info("conmon version", $conmon_version);
     record_info("conmon package version", script_output("rpm -q conmon"));
+
+    switch_to_user;
 
     # Download conmon sources
     patch_sources "conmon", "v$conmon_version", "test";

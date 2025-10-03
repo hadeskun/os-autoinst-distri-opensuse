@@ -28,18 +28,19 @@ use Utils::Architectures;
 
 our @EXPORT = qw(
   bats_post_hook
-  bats_setup
   bats_tests
-  install_git
   mount_tmp_vartmp
+  patch_junit
   patch_sources
   run_command
+  setup_pkgs
   switch_to_root
   switch_to_user
 );
 
 my $curl_opts = "-sL --retry 9 --retry-delay 100 --retry-max-time 900";
 my $test_dir = "/var/tmp/";
+my $rebooted = 0;
 my $settings;
 
 my @commands = ();
@@ -112,14 +113,13 @@ sub install_bats {
 
     assert_script_run "curl -o /usr/local/bin/bats_skip_notok " . data_url("containers/bats/skip_notok.py");
     assert_script_run "chmod +x /usr/local/bin/bats_skip_notok";
-    assert_script_run "curl -o /usr/local/bin/patch_junit " . data_url("containers/patch_junit.py");
-    assert_script_run "chmod +x /usr/local/bin/patch_junit";
 }
 
 sub configure_oci_runtime {
     my $oci_runtime = shift;
 
     return if (script_run("command -v podman") != 0);
+    return if (script_run("test -f /etc/containers/containers.conf.d/engine.conf") == 0);
 
     if (!$oci_runtime) {
         $oci_runtime = script_output("podman info --format '{{ .Host.OCIRuntime.Name }}'");
@@ -163,8 +163,6 @@ sub delegate_controllers {
 }
 
 sub enable_modules {
-    return if is_sle("16+");    # no modules on SLES16+
-
     add_suseconnect_product(get_addon_fullname('desktop'));
     add_suseconnect_product(get_addon_fullname('sdk'));
     add_suseconnect_product(get_addon_fullname('python3')) if is_sle('>=15-SP4');
@@ -172,10 +170,21 @@ sub enable_modules {
     add_suseconnect_product(get_addon_fullname('phub'));
 }
 
+sub patch_junit {
+    my ($package, $version, $xmlfile, $skip_tests) = @_;
+    my $os_version = join(' ', get_var("DISTRI"), get_var("VERSION"), get_var("BUILD"), get_var("ARCH"));
+
+    my @passed = split /\n/, script_output "patch_junit $xmlfile '$package $version $os_version' $skip_tests";
+    foreach my $pass (@passed) {
+        record_info("PASS", $pass);
+    }
+}
+
 sub patch_logfile {
     my ($log_file, $xmlfile, @skip_tests) = @_;
 
     my $package = get_required_var("BATS_PACKAGE");
+    my $version = script_output "rpm -q --queryformat '%{VERSION}' $package";
 
     die "BATS failed!" if (script_run("test -e $log_file") != 0);
 
@@ -183,11 +192,7 @@ sub patch_logfile {
 
     my $skip_tests = join(' ', map { "\"$_\"" } @skip_tests);
     assert_script_run "bats_skip_notok $log_file $skip_tests" if (@skip_tests);
-    # We must unconditionally call patch_junit to prefix suitename when needed
-    my @passed = split /\n/, script_output "patch_junit $xmlfile $skip_tests";
-    foreach my $pass (@passed) {
-        record_info("PASS", $pass);
-    }
+    patch_junit $package, $version, $xmlfile, $skip_tests;
 }
 
 # /tmp as tmpfs has multiple issues: it can't store SELinux labels, consumes RAM and doesn't have enough space
@@ -208,14 +213,12 @@ EOF
     write_sut_file('/etc/systemd/system/tmp.mount.d/override.conf', $override_conf);
 }
 
-sub bats_setup {
+sub setup_pkgs {
     my ($self, @pkgs) = @_;
-
-    my $package = get_required_var("BATS_PACKAGE");
 
     push @commands, "### RUN AS root";
 
-    if (get_var("BATS_TEST_REPOS", "")) {
+    if (get_var("TEST_REPOS", "")) {
         if (script_run("zypper lr | grep -q SUSE_CA")) {
             run_command "zypper addrepo --refresh http://download.opensuse.org/repositories/SUSE:/CA/openSUSE_Tumbleweed/SUSE:CA.repo";
         }
@@ -223,18 +226,20 @@ sub bats_setup {
             run_command "zypper --gpg-auto-import-keys -n install ca-certificates-suse";
         }
 
-        foreach my $repo (split(/\s+/, get_var("BATS_TEST_REPOS", ""))) {
+        foreach my $repo (split(/\s+/, get_var("TEST_REPOS", ""))) {
             run_command "zypper addrepo $repo";
         }
     }
 
-    foreach my $pkg (split(/\s+/, get_var("BATS_TEST_PACKAGES", ""))) {
+    foreach my $pkg (split(/\s+/, get_var("TEST_PACKAGES", ""))) {
         run_command "zypper --gpg-auto-import-keys --no-gpg-checks -n install $pkg";
     }
 
-    install_bats;
+    install_bats if get_var("BATS_PACKAGE");
+    assert_script_run "curl -o /usr/local/bin/patch_junit " . data_url("containers/patch_junit.py");
+    assert_script_run "chmod +x /usr/local/bin/patch_junit";
 
-    enable_modules if is_sle;
+    enable_modules if is_sle("<16");
 
     my $install_ncat = 0;
     if (grep { $_ eq "ncat" } @pkgs) {
@@ -247,20 +252,41 @@ sub bats_setup {
     if ($oci_runtime && !grep { $_ eq $oci_runtime } @pkgs) {
         push @pkgs, $oci_runtime;
     }
-    # We use xz to compress core files
-    push @pkgs, "xz";
+    push @pkgs, qw(jq xz);
     @pkgs = uniq sort @pkgs;
-    run_command "zypper --gpg-auto-import-keys -n install @pkgs", timeout => 300;
+    run_command "zypper --gpg-auto-import-keys -n install @pkgs", timeout => 600;
 
     configure_oci_runtime $oci_runtime;
 
     install_ncat if $install_ncat;
 
+    return if $rebooted;
+
     install_git;
+
+    # Add IP to /etc/hosts
+    my $iface = script_output "ip -4 --json route list match default | jq -Mr '.[0].dev'";
+    my $ip_addr = script_output "ip -4 --json addr show $iface | jq -Mr '.[0].addr_info[0].local'";
+    assert_script_run "echo $ip_addr \$(hostname) >> /etc/hosts";
+
+    # Enable SSH
+    my $algo = "ed25519";
+    systemctl 'enable --now sshd';
+    assert_script_run "ssh-keygen -t $algo -N '' -f ~/.ssh/id_$algo";
+    assert_script_run "cat ~/.ssh/id_$algo.pub >> ~/.ssh/authorized_keys";
+    assert_script_run "ssh-keyscan localhost 127.0.0.1 ::1 | tee -a ~/.ssh/known_hosts";
+    # Persist SSH connections
+    # https://docs.docker.com/engine/security/protect-access/#ssh-tips
+    my $ssh_config = <<'EOF';
+ControlMaster     auto
+ControlPath       ~/.ssh/control-%C
+ControlPersist    yes
+EOF
+    write_sut_file('/root/.ssh/config', $ssh_config);
 
     delegate_controllers;
 
-    if (check_var("ENABLE_SELINUX", "0") && script_output("getenforce") eq "Enforcing") {
+    if (check_var("SELINUX_ENFORCE", "0") && script_output("getenforce") eq "Enforcing") {
         record_info("Disabling SELinux");
         run_command "sed -i 's/^SELINUX=.*/SELINUX=permissive/' /etc/selinux/config";
         run_command "setenforce 0";
@@ -287,6 +313,7 @@ sub bats_setup {
     power_action('reboot', textmode => 1);
     $self->wait_boot();
     push @commands, "reboot";
+    $rebooted = 1;
 
     select_serial_terminal;
 
@@ -372,6 +399,8 @@ sub bats_post_hook {
 
     write_sut_file('/tmp/commands.txt', join("\n", @commands));
     upload_logs('/tmp/commands.txt');
+
+    script_run('cd / ; rm -rf /tmp/logs');
 }
 
 sub bats_tests {
@@ -418,11 +447,7 @@ sub bats_tests {
     $log_file .= ".tap.txt";
     $cmd .= " | tee -a $log_file";
 
-    my $version = script_output "rpm -q --queryformat '%{VERSION} %{RELEASE}' $package";
-    my $os_version = join(' ', get_var("DISTRI"), get_var("VERSION"), get_var("BUILD"), get_var("ARCH"));
-
     run_command "echo $log_file .. > $log_file";
-    run_command "echo '# $package $version $os_version' >> $log_file";
     push @commands, $cmd;
     my $ret = script_run($cmd, timeout => $timeout);
     script_run "mv report.xml $xmlfile";

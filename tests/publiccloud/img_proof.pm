@@ -6,7 +6,7 @@
 # Package: python3-img-proof
 # Summary: Use img-proof framework to test public cloud SUSE images
 #
-# Maintainer: <qa-c@suse.de>
+# Maintainer: QE-C team <qa-c@suse.de>
 
 use Mojo::Base 'publiccloud::basetest';
 use testapi;
@@ -14,9 +14,7 @@ use Path::Tiny;
 use Mojo::JSON;
 use publiccloud::utils qw(is_ondemand is_hardened);
 use publiccloud::ssh_interactive 'select_host_console';
-use version_utils 'is_sle';
 use File::Basename 'basename';
-use upload_system_log 'upload_supportconfig_log';
 
 sub patch_json {
     my ($file) = @_;
@@ -88,7 +86,8 @@ sub run {
 
     unless ($args->{my_provider} && $args->{my_instance}) {
         $args->{my_provider} = $self->provider_factory();
-        $args->{my_instance} = $args->{my_provider}->create_instance(check_guestregister => is_ondemand ? 1 : 0);
+        $args->{my_instance} = $args->{my_provider}->create_instance();
+        $args->{my_instance}->wait_for_guestregister() if (is_ondemand);
     }
     $instance = $args->{my_instance};
     $provider = $args->{my_provider};
@@ -154,13 +153,7 @@ sub run {
         upload_logs('/tmp/rpm_qa.txt');
         $instance->run_ssh_command(cmd => 'sudo journalctl -b > /tmp/journalctl_b.txt', no_quote => 1);
         upload_logs('/tmp/journalctl_b.txt');
-    }
-
-    if (is_hardened() && !check_var('SCAP_REPORT', 'skip')) {
-        # Upload SCAP profile used by img-proof
-        my $url = "https://ftp.suse.com/pub/projects/security/oval/suse.linux.enterprise.15.xml.gz";
-        assert_script_run("curl --fail -LO $url");
-        upload_logs("suse.linux.enterprise.15.xml.gz");
+        die('img_proof failed');
     }
 }
 
@@ -169,7 +162,6 @@ sub cleanup {
     # upload logs on unexpected failure
     my $ret = script_run('test -d img_proof_results');
     if (defined($ret) && $ret == 0) {
-        upload_supportconfig_log();
         assert_script_run('tar -zcvf img_proof_results.tar.gz img_proof_results');
         upload_logs('img_proof_results.tar.gz', failok => 1);
     }
