@@ -10,6 +10,7 @@ use autoyast qw(expand_agama_profile generate_json_profile);
 use version_utils qw(is_sle);
 
 sub run {
+    return;
     my $profile = get_required_var('AGAMA_PROFILE');
     my $profile_url = ($profile =~ /\.libsonnet/) ?
       generate_json_profile($profile) :
