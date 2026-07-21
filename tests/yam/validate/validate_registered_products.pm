@@ -25,12 +25,10 @@ sub run {
 
     my $json = decode_json(script_output("SUSEConnect -s"));
     my %map;
-    record_info("JSON",$json);
     foreach my $data (@$json) {
         $map{$data->{identifier}} = $data;
     }
-    record_info("MAP",\%map);
-
+    
     for my $product (@{get_test_suite_data()->{products}}) {
         unless (is_registered_and_active($map{$product})) {
             record_info("MAP PRODUCT",$map{$product});
