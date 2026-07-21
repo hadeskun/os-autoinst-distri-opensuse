@@ -535,6 +535,7 @@ sub terraform_apply {
     $vars{gpu} = 'true' if (get_var('PUBLIC_CLOUD_NVIDIA'));
     $vars{ssh_public_key} = $self->ssh_key . '.pub';
 
+    my @alternative_zones;
     my ($ret, $tf_apply_output);
     for my $region (@regions) {
         # Swap the active region inline so all the region-dependent variables
@@ -542,18 +543,20 @@ sub terraform_apply {
         $self->provider_client->region($region);
         record_info('REGION', "Attempting the deployment in region '$region'");
 
-        if (!get_var('PUBLIC_CLOUD_SLES4SAP')) {
-            if (is_ec2) {
-                $vars{availability_zone} = script_output("aws ec2 describe-instance-type-offerings --location-type availability-zone --filters Name=instance-type,Values=" . $instance_type . " --region '" . $self->provider_client->region . "' --query 'InstanceTypeOfferings[0].Location' --output 'text'");
-                die('Instance type not supported by the selected Availability Zone') if ($vars{availability_zone} =~ /None/);
-                $vars{vpc_security_group_ids} = script_output("aws ec2 describe-security-groups --region '" . $self->provider_client->region . "' --filters 'Name=group-name,Values=tf-sg' --query 'SecurityGroups[0].GroupId' --output text");
-                $vars{subnet_id} = script_output("aws ec2 describe-subnets --region '" . $self->provider_client->region . "' --filters 'Name=tag:Name,Values=tf-subnet' 'Name=availabilityZone,Values=" . $vars{availability_zone} . "' --query 'Subnets[0].SubnetId' --output text");
-            } elsif (is_azure) {
-                my $subnet_id = script_output("az network vnet subnet list -g 'tf-" . $self->provider_client->region . "-rg' --vnet-name 'tf-network' --query '[0].id' --output 'tsv'");
-                $vars{subnet_id} = $subnet_id if ($subnet_id);
-            }
-            $vars{region} = $self->provider_client->region;
+        if (is_ec2) {
+            $vars{availability_zone} = script_output("aws ec2 describe-instance-type-offerings --location-type availability-zone --filters Name=instance-type,Values=" . $instance_type . " --region '" . $region . "' --query 'InstanceTypeOfferings[0].Location' --output 'text'");
+            die('Instance type not supported by the selected Availability Zone') if ($vars{availability_zone} =~ /None/);
+            $vars{vpc_security_group_ids} = script_output("aws ec2 describe-security-groups --region '" . $region . "' --filters 'Name=group-name,Values=tf-sg' --query 'SecurityGroups[0].GroupId' --output text");
+            $vars{subnet_id} = script_output("aws ec2 describe-subnets --region '" . $region . "' --filters 'Name=tag:Name,Values=tf-subnet' 'Name=availabilityZone,Values=" . $vars{availability_zone} . "' --query 'Subnets[0].SubnetId' --output text");
+        } elsif (is_azure) {
+            my $subnet_id = script_output("az network vnet subnet list -g 'tf-" . $region . "-rg' --vnet-name 'tf-network' --query '[0].id' --output 'tsv'");
+            $vars{subnet_id} = $subnet_id if ($subnet_id);
+        } elsif (is_gce) {
+            @alternative_zones = split /\s*,\s*/,
+              script_output("gcloud compute zones list --filter='region=" . $region . "' --format=\"value(name.split('-').slice(-1))\" | tr '\n' ','");
+            $vars{availability_zone} = $alternative_zones[0];
         }
+        $vars{region} = $self->provider_client->region;
 
         my $cmd = terraform_cmd($runner . ' plan -no-color -out myplan', %vars);
         script_retry($cmd, timeout => $terraform_timeout, delay => 3, retry => 6);
@@ -568,8 +571,6 @@ sub terraform_apply {
         # when all instances of certain type are booked in one AZ there is a chance that other AZ in same region still have them
         # to improve test stability let's loop over all available AZ in case initial one throwing error that all instances are booked
         if ($ret != 0 && is_gce() && ($tf_apply_output =~ /A .* VM instance with 1 .* accelerator\(s\) is currently unavailable in the .* zone|Machine type with name .* does not exist in zone .*|The zone 'projects.*' does not have enough resources available to fulfill the request/)) {
-            my $zones_output = script_output("gcloud compute zones list --filter='region=" . $vars{region} . "' --format=\"value(name.split('-').slice(-1))\" | tr '\n' ','");
-            my @alternative_zones = split /\s*,\s*/, $zones_output;
             @alternative_zones = grep { $_ ne $vars{availability_zone} } @alternative_zones;
             record_info('ZONE UNAVAILABLE', "Alternative zones " . join(', ', @alternative_zones));
             for my $az (@alternative_zones) {
@@ -619,17 +620,10 @@ sub terraform_apply {
 
     my $output = decode_json(script_output($runner . ' output -json'));
     my ($vms, $ips, $resource_id);
-    if (get_var('PUBLIC_CLOUD_SLES4SAP')) {
-        foreach my $vm_type ('hana', 'drbd', 'netweaver') {
-            push @{$vms}, @{$output->{$vm_type . '_name'}->{value}};
-            push @{$ips}, @{$output->{$vm_type . '_public_ip'}->{value}};
-        }
-    } else {
-        $vms = $output->{vm_name}->{value};
-        $ips = $output->{public_ip}->{value};
-        # ResourceID is only provided in the PUBLIC_CLOUD_AZURE_NFS_TEST
-        $resource_id = $output->{resource_id}->{value} if (get_var('PUBLIC_CLOUD_AZURE_NFS_TEST'));
-    }
+    $vms = $output->{vm_name}->{value};
+    $ips = $output->{public_ip}->{value};
+    # ResourceID is only provided in the PUBLIC_CLOUD_AZURE_NFS_TEST
+    $resource_id = $output->{resource_id}->{value} if (get_var('PUBLIC_CLOUD_AZURE_NFS_TEST'));
 
     my @instances;
     foreach my $i (0 .. $#{$vms}) {

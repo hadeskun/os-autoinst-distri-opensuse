@@ -395,109 +395,118 @@ sub update_instance_ip {
     }
 }
 
-sub _scan_ssh_host_key {
+sub scan_ssh_host_key {
     my ($self) = @_;
 
     record_info('RESCAN', 'Rescanning SSH host key');
 
-    my $known_hosts_2 = (script_run("test -f /home/$testapi::username/.ssh/known_hosts") eq 0)
+    my $user_known_hosts = (script_run("test -f /home/$testapi::username/.ssh/known_hosts") eq 0)
       ? "/home/$testapi::username/.ssh/known_hosts"
       : "";
 
-    script_run("ssh-keyscan $self->{public_ip} | tee -a ~/.ssh/known_hosts $known_hosts_2");
-}
-
-sub _wait_port_state {
-    my ($self, %args) = @_;
-
-    my ($duration, $exit_code);
-
-    while (($duration = time() - $args{start_time}) < $args{timeout}) {
-        $exit_code = script_run('nc -vz -w 1 ' . $self->public_ip . ' ' . $args{port}, quiet => 1);
-
-        last if ($args{unreachable} ? !isok($exit_code) : isok($exit_code));
-
-        sleep $args{delay};
-    }
-
-    return {
-        duration => $duration,
-        exit_code => $exit_code,
-        timed_out => $duration >= $args{timeout},
-    };
-}
-
-sub _wait_for_ssh_login {
-    my ($self, %args) = @_;
-
-    my ($duration, $exit_code);
-
-    while (($duration = time() - $args{start_time}) < $args{timeout}) {
-        my $ssh_opts = $self->ssh_opts() . ' -o ControlPath=none -o ConnectTimeout=10 -o strictHostKeyChecking=no -o UserKnownHostsFile=/dev/null';
-
-        $exit_code = $self->ssh_script_run(
-            cmd => 'uptime',
-            ssh_opts => $ssh_opts,
-            username => $args{username},
-            timeout => $args{timeout} - $duration,
-            apply_graceful_timeout => 1
-        );
-
-        last if isok($exit_code);
-
-        # After the instance is resumed from hibernation the SSH can freeze
-        sleep $args{delay};
-    }
-
-    return {
-        duration => $duration,
-        exit_code => $exit_code,
-        timed_out => $duration >= $args{timeout},
-    };
+    script_retry("ssh-keyscan $self->{public_ip} | tee -a ~/.ssh/known_hosts $user_known_hosts", retry => 6, delay => 10);
 }
 
 sub wait_for_ssh {
     my ($self, %args) = @_;
-
-    $args{timeout} = get_var('PUBLIC_CLOUD_SSH_TIMEOUT', $args{timeout} // 600);
-    $args{scan_ssh_host_key} //= 0;
-
-    $args{username} //= $self->username();
-
-    $args{delay} //= $args{timeout} > 180 ? 5 : 1;
-    $args{start_time} = time();
-
-    my %args_for_port_state = %args;
-    $args_for_port_state{port} = 22;
-    my $port_state = $self->_wait_port_state(%args_for_port_state);
-
-    die "SSH port didn't become available. Exit code: $port_state->{exit_code}; Timed out: $port_state->{timed_out}; Duration: $port_state->{duration}"
-      if ($port_state->{timed_out} || !isok($port_state->{exit_code}));
-
-    $self->_scan_ssh_host_key() if $args{scan_ssh_host_key};
-
-    my $ssh_login_state = $self->_wait_for_ssh_login(%args);
-
-    die "SSH login didn't become available. Exit code: $ssh_login_state->{exit_code}; Timed out: $ssh_login_state->{timed_out}; Duration: $ssh_login_state->{duration}"
-      if ($ssh_login_state->{timed_out} || !isok($ssh_login_state->{exit_code}));
+    $self->wait_for_ssh_reachable();
+    $self->scan_ssh_host_key() if $args{scan_ssh_host_key};
+    $self->wait_for_ssh_login();
 }
+
+sub wait_for_ssh_reachable {
+    my ($self, %args) = @_;
+
+    my $delay = $args{delay} // 30;
+    my $timeout = $args{timeout} // get_var('PUBLIC_CLOUD_SSH_TIMEOUT', 300);
+    my $retry = $timeout / $delay;
+    my $port = $args{port} // 22;
+
+    script_retry('nc -vz -w 1 ' . $self->public_ip . ' ' . $port, delay => $delay, retry => $retry, fail_message => "ssh port unreachable after $timeout seconds (port probed via nc)");
+}
+
+=head2 wait_for_ssh_unreachable
+
+    my $rc = $instance->wait_for_ssh_unreachable([delay => 2] [, timeout => 300] [, port => 22] [, die => 1]);
+
+Wait until the SSH port of this instance stops accepting connections, i.e.
+when the instance goes down. Retrying continues until the port becomes
+unreachable or C<timeout> seconds elapse (the number of attempts is derived
+as C<timeout / delay>).
+
+This is typically used to detect the reboot/shutdown window (e.g. from
+C<softreboot>). The default C<delay> is intentionally small so the short
+interval during which SSH becomes unreachable is not missed.
+
+Returns the exit code of the last C<nc> probe, as forwarded by C<script_retry>.
+The value tells whether the port is still connectable: C<0> means "not
+connected" (unreachable), a non-zero value means "still connected" (reachable).
+
+=over
+
+=item * C<0> when the port became unreachable within the timeout (success).
+
+=item * a non-zero value when the port is still reachable after the timeout,
+        but only if C<die> is set to a false value.
+
+=item * with the default C<die =E<gt> 1>, a still-reachable port makes
+        C<script_retry> B<die> instead of returning, so the only value ever
+        returned in that mode is C<0>.
+
+=item * C<undef> as a corner case: C<script_retry> returns C<undef> when the
+        last probe attempt is killed by its C<timeout> wrapper before an exit
+        code is reported. This is unlikely here (the probe is C<nc -w 1>), but
+        callers relying on the return value should treat C<undef> as "not
+        unreachable".
+
+=back
+
+Arguments:
+
+=over
+
+=item B<delay> - seconds to wait between two probes. Defaults to C<2>. Keep it
+                 low to avoid missing the brief window where SSH is unreachable.
+
+=item B<timeout> - overall time budget in seconds. Defaults to the test setting
+                   C<PUBLIC_CLOUD_SSH_TIMEOUT> or C<300> if unset.
+
+=item B<port> - TCP port to probe. Defaults to C<22>.
+
+=item B<die> - when true (the default C<1>) the function dies if the port is
+               still reachable after C<timeout>. Set to C<0> to instead return
+               the non-zero return code.
+
+=back
+
+=cut
 
 sub wait_for_ssh_unreachable {
     my ($self, %args) = @_;
 
-    $args{timeout} //= get_var('PUBLIC_CLOUD_SSH_TIMEOUT', 600);
-    $args{delay} //= $args{timeout} > 180 ? 5 : 1;
-    $args{start_time} = time();
+    # delay must be low otherwise we miss the reboot window where ssh is unreachable
+    my $delay = $args{delay} // 2;
+    my $timeout = $args{timeout} // get_var('PUBLIC_CLOUD_SSH_TIMEOUT', 300);
+    my $retry = $timeout / $delay;
+    my $port = $args{port} // 22;
+    my $die = ${args}{die} // 1;
 
-    my %args_for_port_state = %args;
-    $args_for_port_state{port} = 22;
-    $args_for_port_state{unreachable} = 1;
+    my $rc = script_retry('! nc -vz -w 1 ' . $self->public_ip . ' ' . $port,
+        delay => $delay,
+        retry => $retry,
+        fail_message => "ssh port still reachable after $timeout seconds (port probed via nc)",
+        die => $die);
+    # Print a warning message, if we don't want to `die` here in the previous check
+    record_info("ssh still reachable", "WARNING: ssh port is still reachable", result => 'fail') if ($rc != 0);
+    return $rc;
+}
 
-    my $port_state = $self->_wait_port_state(%args_for_port_state);
-    die "SSH port didn't become unavailable. Exit code: $port_state->{exit_code}; Timed out: $port_state->{timed_out}; Duration: $port_state->{duration}"
-      if ($port_state->{timed_out} || isok($port_state->{exit_code}));
+sub wait_for_ssh_login {
+    my ($self, %args) = @_;
 
-    return $port_state;
+    ## ssh options to avoid issues with pipelining and host key validation
+    my $ssh_opts = $self->ssh_opts() . ' -o ControlPath=none -o ConnectTimeout=10 -o strictHostKeyChecking=no -o UserKnownHostsFile=/dev/null';
+    $self->ssh_script_retry("true", ssh_opts => $ssh_opts, retry => 10, delay => 30, fail_message => "ssh connection failed (10 attempts in 300 seconds)");
 }
 
 =head2 isok
@@ -556,10 +565,7 @@ sub softreboot {
     my $start_time = time();
 
     # wait till ssh disappear
-    my $out = $self->wait_for_ssh_unreachable(timeout => $args{timeout}, username => $args{username});
-    # ok ssh port closed
-    record_info("Shutdown failed", "WARNING: while stopping the system, ssh port still open after timeout,\nreporting: $out->{duration},\nexit code: $out->{exit_code}, \ntimed out: $out->{timed_out}", result => 'fail')
-      if ($out->{timed_out} || isok($out->{exit_code}));    # not ok port still open
+    $self->wait_for_ssh_unreachable(die => 0);
 
     my $shutdown_time = time() - $start_time;
     die("Waiting for system down failed!") unless ($shutdown_time < $args{timeout});
@@ -668,7 +674,17 @@ sub check_cloudinit() {
     # cloud-init status
     my $rc = $self->ssh_script_run(cmd => "sudo cloud-init status --wait", timeout => 300);
     record_info("cloud-init", $self->ssh_script_output("sudo cloud-init status --long", proceed_on_failure => 1, timeout => 300), result => $rc == 0 ? 'ok' : 'fail');
-    die "cloud-init failed with return code $rc" if ($rc != 0 && get_var('PUBLIC_CLOUD_IGNORE_CLOUDINIT_ERRORS') != 1);
+    # Cloud-init error codes: 0 - success, 1 - unrecoverable error, 2 - recoverable error (See cloud-init documentation)
+    # As of https://bugzilla.suse.com/show_bug.cgi?id=1266207 we ignore recoverable errors
+    if (get_var('PUBLIC_CLOUD_IGNORE_CLOUDINIT_ERRORS') != 1) {
+        if ($rc == 1) {
+            die "unrecoverable cloud-init error";
+        } elsif ($rc == 2) {
+            record_info("cloud-init", "recoverable error (return code 2)");
+        } elsif ($rc != 0) {
+            die "unknown cloud-init return code $rc";
+        }
+    }
 
     # cloud-id
     my $cloud_id = (is_azure) ? 'azure' : 'aws';

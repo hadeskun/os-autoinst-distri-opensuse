@@ -2346,6 +2346,9 @@ sub az_network_dns_add_record {
     );
 
 Creates private DNS zone link between VNET and DNS zone.
+Argument '--registration-enabled' controls whether the VNet's virtual machines automatically
+register their own DNS records in that private zone.
+Setting it to false (Common Use Cases) means Auto-Registration is disabled.
 
 =over
 
@@ -2370,7 +2373,7 @@ sub az_network_dns_link_create {
         "--zone-name $args{zone_name}",
         "--virtual-network $args{vnet}",
         "--name $args{name}",
-        '--registration-enabled true',
+        '--registration-enabled false',
         $SDAF_Azure_podman_flake_filter    # This updates all VMs A records immediately
     );
 

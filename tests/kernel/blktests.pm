@@ -17,6 +17,7 @@ use LTP::utils 'prepare_whitelist_environment';
 use package_utils 'install_package';
 use Utils::Logging qw(export_logs_basic save_and_upload_log);
 use Kernel::block_dev qw(is_block_device record_storage_info);
+use Kernel::utils qw(is_debugfs_mounted enable_debugfs);
 
 sub prepare_blktests_config {
     my ($devices, $test_case_dev_array) = @_;
@@ -47,8 +48,10 @@ sub run {
     my $test_case_dev_array = get_var('BLKTESTS_TEST_CASE_DEV_ARRAY');
     my $install = get_var('BLKTESTS_INSTALL', 'from_repo');
 
-    record_info('KERNEL', script_output('rpm -qi kernel-default'));
+    record_info('KERNEL', script_output('(rpm -qi kernel-default; uname -a)'));
     save_and_upload_log('(rpm -qi kernel-default; uname -a)', 'kernel_bug_report.txt');
+
+    enable_debugfs() unless is_debugfs_mounted();
 
     #QA repo is added with lower prio in order to avoid possible problems
     #with some packages provided in both, tested product and qa repo; example: fio
