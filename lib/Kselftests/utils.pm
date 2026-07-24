@@ -16,6 +16,7 @@ use utils;
 use Kselftests::parser;
 use LTP::WhiteList;
 use version_utils qw(is_sle has_selinux is_tumbleweed is_transactional);
+use Kernel::utils qw(is_debugfs_mounted enable_debugfs);
 use base 'opensusebasetest';
 use File::Basename qw(basename);
 use repo_tools qw(add_qa_head_repo);
@@ -180,6 +181,8 @@ sub install_dependencies
 {
     my ($collection) = @_;
 
+    enable_debugfs() unless is_debugfs_mounted();
+
     # selftests may manipulate namespaces and devices in ways that
     # trigger AVC denials on SELinux-enabled systems
     script_run('setenforce 0') if has_selinux;
@@ -332,6 +335,7 @@ sub post_process_single
     my $hardfails = 0;
     my $softfails = 0;
     for my $test_ln (@log) {
+        next if $test_ln =~ /^(not )?ok \d+ selftests: \S+: \S+/;
         $test_ln = $parser->parse_line($test_ln);
         if (!$test_ln) {
             next;

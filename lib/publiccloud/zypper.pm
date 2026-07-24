@@ -47,6 +47,8 @@ through plain C<zypper>.
 
 =item L</pc_wait_quit>             - wait for zypper/rpm/etc. to finish
 
+=item L</pc_wait_quit_local>       - like C<pc_wait_quit>, but console-direct
+
 =item L</pc_installed_packages>    - filter list to installed packages
 
 =item L</pc_available_packages>    - filter list to available-but-not-installed
@@ -68,7 +70,7 @@ use utils ();
 use transactional ();
 use version_utils qw(is_transactional);
 
-# Zypper exit codes (see man zypper, EXIT CODES section)
+# Zypper and timeout exit codes (see man zypper, EXIT CODES section)
 use constant {
     EXIT_OK => 0,
     EXIT_SOLVER => 4,    # generic solver problem
@@ -78,14 +80,28 @@ use constant {
     EXIT_REBOOT_NEEDED => 102,
     EXIT_REBOOT_SCHED => 103,
     EXIT_CAP_NOT_FOUND => 104,    # ZYPPER_EXIT_INF_CAP_NOT_FOUND
+    EXIT_REPOS_SKIPPED => 106,    # ZYPPER_EXIT_INF_REPOS_SKIPPED
     EXIT_RPM_SCRIPT_FAIL => 107,    # ZYPPER_EXIT_INF_RPM_SCRIPT_FAILED
-                                    # Tunable defaults
+    EXIT_TIMEOUT => 124,    # exit code from the timeout utility, not zypper
+    EXIT_TIMEOUT_KILLED => 137,    # as above, but SIGKILLed
+
+    # Tunable defaults
     DEFAULT_TIMEOUT_ZYPPER => 700,
     DEFAULT_TIMEOUT_TRANSACTIONAL => 900,
     DEFAULT_RETRY => 1,
     DEFAULT_DELAY => 5,
     ZYPPER_LOG => '/var/log/zypper.log',
+    TRANSACTIONAL_LOG => '/var/log/transactional-update.log',
 };
+
+# Process names pc_wait_quit()/pc_wait_quit_local() poll for (poo#204534).
+# pgrep (without -f) truncates comm to 15 chars, so the 20-char
+# "transactional-update" never matches as-is; substr() mirrors that
+# truncation. -f would dodge it but self-matches the check's own argv.
+use constant BUSY_PROCESS_PATTERN => join('|',
+    qw(zypper packagekit purge-kernels rpm snapper),
+    substr('transactional-update', 0, 15),
+);
 
 our @EXPORT_OK = qw(
   pc_zypper_call
@@ -94,6 +110,7 @@ our @EXPORT_OK = qw(
   pc_refresh
   pc_add_repo
   pc_wait_quit
+  pc_wait_quit_local
   pc_installed_packages
   pc_available_packages
   pc_install_packages_local
@@ -105,7 +122,10 @@ our @EXPORT_OK = qw(
   EXIT_REBOOT_NEEDED
   EXIT_REBOOT_SCHED
   EXIT_CAP_NOT_FOUND
+  EXIT_REPOS_SKIPPED
   EXIT_RPM_SCRIPT_FAIL
+  EXIT_TIMEOUT
+  EXIT_TIMEOUT_KILLED
 );
 
 our %EXPORT_TAGS = (
@@ -164,6 +184,10 @@ my %FAILURE_CLASSIFIERS = (
         label => 'ZYPPER_EXIT_INF_RPM_SCRIPT_FAILED',
         regex => 'RpmPostTransCollector\.cc\(executeScripts\):.* scriptlet failed, exit status',
     },
+    EXIT_REPOS_SKIPPED() => {
+        label => 'ZYPPER_EXIT_INF_REPOS_SKIPPED (poo#204057)',
+        regex => '(MediaCurl\.cc|Login failed|Not ready to read within timeout)',
+    },
 );
 
 # ---------------------------------------------------------------------------
@@ -197,6 +221,12 @@ Options (all optional):
                                 zypper-related processes to finish before
                                 running the command
 
+=item B<apply_graceful_timeout> => if true (default), wrap the remote
+                                command in C<timeout> so an SSH-level
+                                stall yields a retryable exit code
+                                (EXIT_TIMEOUT/EXIT_TIMEOUT_KILLED) instead
+                                of dying past the retry loop
+
 =back
 
 =cut
@@ -214,6 +244,9 @@ sub pc_zypper_call {
 Runs C<sudo transactional-update -n $cmd> on a remote instance and triggers
 a soft reboot on success (unless C<no_reboot => 1> is passed). The default
 accepted exit codes are 0, 102, 103.
+
+Also accepts the same C<apply_graceful_timeout> option as
+L</pc_zypper_call>, since both are implemented on top of C<_run>.
 
 =cut
 
@@ -297,8 +330,9 @@ sub pc_add_repo {
 
     pc_wait_quit($instance, [timeout => 20], [delay => 10], [retry => 120]);
 
-Waits until no zypper / packagekit / purge-kernels / rpm processes are
-running on the remote instance. Defaults give a ~20 minute ceiling.
+Waits until no zypper / packagekit / purge-kernels / rpm / transactional-update
+/ snapper processes are running on the remote instance, via SSH. Defaults
+give a ~20 minute ceiling.
 
 =cut
 
@@ -309,7 +343,7 @@ sub pc_wait_quit {
     my $retry = $opts{retry} // 120;
 
     # RC 0 (success) only when no matching processes exist.
-    my $cmd = q{! pgrep -a "zypper|packagekit|purge-kernels|rpm"};
+    my $cmd = q{! pgrep -a "} . BUSY_PROCESS_PATTERN . q{"};
 
     $instance->ssh_script_retry(
         cmd => $cmd,
@@ -317,6 +351,31 @@ sub pc_wait_quit {
         delay => $delay,
         retry => $retry,
     );
+}
+
+=head2 pc_wait_quit_local
+
+    pc_wait_quit_local([timeout => 20], [delay => 10], [retry => 120]);
+
+Console-direct counterpart to L</pc_wait_quit>: waits until no
+zypper/packagekit/purge-kernels/rpm/transactional-update/snapper processes
+are running, using the currently selected console (plain C<script_retry>)
+instead of an SSH-wrapped remote command.
+
+Use this when already directly attached to the target's console (e.g. an
+interactive SSH session opened by C<publiccloud::ssh_interactive>, or a
+local transactional system), where going through C<< $instance->ssh_* >>
+would open a redundant nested SSH connection.
+
+=cut
+
+sub pc_wait_quit_local {
+    my (%opts) = @_;
+    my $timeout = $opts{timeout} // 20;
+    my $delay = $opts{delay} // 10;
+    my $retry = $opts{retry} // 120;
+
+    utils::script_retry(q{! pgrep -a "} . BUSY_PROCESS_PATTERN . q{"}, timeout => $timeout, delay => $delay, retry => $retry);
 }
 
 =head2 pc_installed_packages
@@ -448,27 +507,28 @@ sub _run {
       ? DEFAULT_TIMEOUT_TRANSACTIONAL
       : DEFAULT_TIMEOUT_ZYPPER;
     $args{rc_only} = 1;
+    $args{apply_graceful_timeout} //= 1;
 
     pc_wait_quit($instance) if $wait_quit;
 
-    my $ret = _retry_loop($instance, $full_cmd, $retry, $delay, \%args);
+    my $ret = _retry_loop($instance, $full_cmd, $retry, $delay, \%args, $kind);
 
     unless (grep { $_ == $ret } @$exit_codes) {
-        _report_failure($instance, $full_cmd, $ret, $proceed);
+        _report_failure($instance, $full_cmd, $ret, $proceed, $kind);
     }
     record_info('zypper remote call', "Command: $full_cmd\nResult: $ret");
     return $ret;
 }
 
 sub _retry_loop {
-    my ($instance, $cmd, $retry, $delay, $ssh_args) = @_;
+    my ($instance, $cmd, $retry, $delay, $ssh_args, $kind) = @_;
     my $ret;
     for my $attempt (1 .. $retry) {
         $ret = $instance->ssh_script_run(cmd => $cmd, %$ssh_args);
         return $ret if $ret == EXIT_OK;
         sleep($delay) if defined $ret;
 
-        my $action = _handle_transient_failure($instance, $ret, $attempt, $retry);
+        my $action = _handle_transient_failure($instance, $ret, $attempt, $retry, $kind);
         return $ret if $action eq 'stop';
         next if $action eq 'retry';
         last;    # 'fail'
@@ -479,7 +539,19 @@ sub _retry_loop {
 # Returns 'retry' (try again), 'stop' (give up but don't drop into the
 # generic failure path), or 'fail' (let _run handle it).
 sub _handle_transient_failure {
-    my ($instance, $ret, $attempt, $max) = @_;
+    my ($instance, $ret, $attempt, $max, $kind) = @_;
+    $kind //= 'zypper';
+
+    # transactional-update has no dedicated lock exit code; it exits non-zero
+    # and logs one of two messages, depending on which of its two independent
+    # locks (CLI wrapper or tukit backend) was contended (poo#204534).
+    if ($kind eq 'transactional') {
+        if (_log_grep($instance, "Couldn't get lock|Another instance of tukit is already running", TRANSACTIONAL_LOG) == 0) {
+            record_info("Retry $attempt/$max as a transactional-update background task is still running");
+            return 'retry';
+        }
+        return 'fail';
+    }
 
     if ($ret == EXIT_SOLVER) {
         # bsc#1070851 -- transient 502 from server; zypper should retry
@@ -500,6 +572,17 @@ sub _handle_transient_failure {
         record_info("Retry $attempt/$max as system management is locked");
         return 'retry';
     }
+    # Retry on timeouts (typically indicates network issues).
+    if ($ret == EXIT_TIMEOUT || $ret == EXIT_TIMEOUT_KILLED) {
+        record_info("Retry $attempt/$max as the zypper command stalled (timeout)");
+        return 'retry';
+    }
+    # poo#204057: not enough evidence yet whether this is expected SMT
+    # eventual-consistency lag or a genuine product bug -- fail clearly
+    # instead of masking it; revisit once we have more data.
+    if ($ret == EXIT_REPOS_SKIPPED) {
+        return 'fail';
+    }
     # EXIT_ERR_COMMIT (8) can be caused by the zypp lock being held at
     # transaction time (the lock is taken later than the PID check done by
     # pc_wait_quit, so pgrep passes while the lock file is still present).
@@ -516,27 +599,42 @@ sub _handle_transient_failure {
 }
 
 sub _report_failure {
-    my ($instance, $cmd, $ret, $proceed) = @_;
+    my ($instance, $cmd, $ret, $proceed, $kind) = @_;
+    $kind //= 'zypper';
+    my $log = $kind eq 'transactional' ? TRANSACTIONAL_LOG : ZYPPER_LOG;
 
-    $instance->ssh_script_run('sudo chmod o+r ' . ZYPPER_LOG);
-    $instance->upload_log(ZYPPER_LOG);
+    $instance->ssh_script_run("sudo chmod o+r $log");
+    $instance->upload_log($log);
 
-    my $info = _classify_failure($instance, $ret);
+    my $info = _classify_failure($instance, $ret, $kind);
     my $msg = "$cmd failed with code: $ret";
     if (defined $info->{label}) {
         $msg .= " ($info->{label})";
     }
-    $msg .= "\n\nRelated zypper logs:\n" . ($info->{excerpt} // '');
+    $msg .= "\n\nRelated " . ($kind eq 'transactional' ? 'transactional-update' : 'zypper') . " logs:\n" . ($info->{excerpt} // '');
 
     die $msg unless $proceed;
     record_info('zypper error', $msg, result => 'fail');
 }
 
 sub _classify_failure {
-    my ($instance, $ret) = @_;
+    my ($instance, $ret, $kind) = @_;
+    $kind //= 'zypper';
+    if ($kind eq 'transactional') {
+        # No session markers in transactional-update.log like zypper's
+        # "Hi, me zypper"; just grab the tail around the failure.
+        return {label => undef, excerpt => _log_tail($instance, TRANSACTIONAL_LOG)};
+    }
     my $cls = $FAILURE_CLASSIFIERS{$ret} // {label => undef, regex => 'Exception\.cc'};
     my $excerpt = _last_zypper_session($instance, $cls->{regex});
     return {label => $cls->{label}, excerpt => $excerpt};
+}
+
+# Last $lines of $log, best-effort (never dies the test on its own).
+sub _log_tail {
+    my ($instance, $log, $lines) = @_;
+    $lines //= 100;
+    return $instance->ssh_script_output("sudo tail -n $lines $log", proceed_on_failure => 1);
 }
 
 # Extract the lines from the last "Hi, me zypper" session that match
@@ -555,9 +653,12 @@ sub _last_zypper_session {
 }
 
 sub _log_grep {
-    my ($instance, $pattern) = @_;
+    my ($instance, $pattern, $log) = @_;
+    $log //= ZYPPER_LOG;
+    # -E (extended regex) so callers can use plain '|' alternation without
+    # needing the GNU BRE '\|' escape.
     return $instance->ssh_script_run(
-        sprintf('sudo grep %s %s', _shell_quote($pattern), ZYPPER_LOG)
+        sprintf('sudo grep -E %s %s', _shell_quote($pattern), $log)
     );
 }
 

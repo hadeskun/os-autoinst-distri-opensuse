@@ -15,7 +15,7 @@ use utils qw(random_string script_retry);
 use version_utils qw(is_transactional is_sle);
 use Utils::Architectures qw(is_aarch64);
 use publiccloud::utils qw(is_byos pc_data_url);
-use publiccloud::zypper qw(pc_zypper_call);
+use publiccloud::zypper qw(pc_zypper_call pc_transactional_call);
 use publiccloud::aws_client;
 use publiccloud::ssh_interactive 'select_host_console';
 
@@ -210,7 +210,7 @@ sub img_proof {
     my ($self, %args) = @_;
 
     $args{instance_type} //= 't3a.large';
-    $args{user} //= 'ec2-user';
+    $args{user} //= $self->provider_client->username;
     $args{provider} //= 'ec2';
     $args{ssh_private_key_file} //= SSH_KEY_PEM;
     $args{key_name} //= $self->ssh_key;
@@ -469,9 +469,10 @@ sub _install_ec2_cloudwatch_agent
     );
 
     if (is_transactional) {
-        $instance->ssh_assert_script_run(
-            cmd => "sudo transactional-update run sh -c 'rpm -Uvh --noscripts $download_directory/$rpm_file'",
-            timeout => 300
+        pc_transactional_call(
+            $instance,
+            "run sh -c 'rpm -Uvh --noscripts $download_directory/$rpm_file'",
+            timeout => 300, exitcode => [0], no_reboot => 1
         );
         $instance->softreboot();
     } else {
