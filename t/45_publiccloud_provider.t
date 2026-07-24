@@ -154,6 +154,8 @@ subtest '[terraform_apply] vars' => sub {
     # Extract the single recorded call that runs 'tofu ... plan ...'
     my ($plan_cmd) = grep { /tofu.*plan/ } @calls;
     ok($plan_cmd, "tofu plan is executed");
+    # Undo _tofu_run_step()'s bash -c wrapper and '\'' escaping (see _mock_terraform_apply).
+    $plan_cmd =~ s/^bash -c '(.*)'$/$1/s and $plan_cmd =~ s/'\\''/'/g;
 
     # Split the command into its individual -var arguments. Values may contain
     # the shell single-quote escape sequence '"'"', so we split on the ' -var '
@@ -325,6 +327,9 @@ sub _mock_terraform_apply {
     # succeed (exit 0) unless a subtest explicitly scripts them.
     $mock->redefine($_ => sub {
             my ($cmd) = @_;
+            # _tofu_run_step() wraps steps as bash -c 'set -o pipefail; ... <cmd> | tee ...',
+            # escaping single quotes as '\''. Undo both so the assertions below see the plain command.
+            $cmd =~ s/^bash -c '(.*)'$/$1/s and $cmd =~ s/'\\''/'/g;
             push @{$args{calls}}, $cmd;
             my $r = $next_response->($cmd);
             return (defined $r ? ($r->{exit} // 0) : 0);
