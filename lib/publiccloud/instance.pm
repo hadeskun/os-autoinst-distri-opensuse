@@ -632,85 +632,12 @@ sub get_state {
     return $self->provider->get_state_from_instance($self, @_);
 }
 
-=head2 network_speed_test
-
-    network_speed_test();
-
-Test the network speed.
-=cut
-
-sub network_speed_test() {
-    my ($self, %args) = @_;
-    my ($cmd, $ret);
-
-    # Curl stats output format
-    my $write_out
-      = 'time_namelookup:\t%{time_namelookup} s\ntime_connect:\t\t%{time_connect} s\ntime_appconnect:\t%{time_appconnect} s\ntime_pretransfer:\t%{time_pretransfer} s\ntime_redirect:\t\t%{time_redirect} s\ntime_starttransfer:\t%{time_starttransfer} s\ntime_total:\t\t%{time_total} s\n';
-    # PC RMT server domain name
-    my $rmt_host = "smt-" . lc(get_required_var('PUBLIC_CLOUD_PROVIDER')) . ".susecloud.net";
-
-    $cmd = "grep \"$rmt_host\" /etc/hosts";
-    $ret = $self->ssh_script_run(cmd => $cmd, apply_graceful_timeout => 1);
-    record_info("RMT_HOST", printf('$ %s\n%s', $cmd, $ret));
-
-    $cmd = "ping -c3 1.1.1.1";
-    $ret = $self->ssh_script_run(cmd => $cmd, apply_graceful_timeout => 1);
-    record_info("PING", printf('$ %s\n%s', $cmd, $ret));
-
-    $cmd = "curl -w '$write_out' -o /dev/null -v https://$rmt_host/";
-    $ret = $self->ssh_script_run(cmd => $cmd, apply_graceful_timeout => 1);
-    record_info("CURL", printf('$ %s\n%s', $cmd, $ret));
-}
-
 sub cleanup_cloudinit() {
     my ($self) = @_;
     $self->ssh_assert_script_run('sudo cloud-init clean --logs');
     if (get_var('PUBLIC_CLOUD_CLOUD_INIT')) {
         $self->ssh_assert_script_run('sudo rm /root/test_cloud-init.txt');
         $self->ssh_assert_script_run('sudo zypper -n rm ed');
-    }
-}
-
-sub check_cloudinit() {
-    my ($self) = @_;
-
-    # cloud-init status
-    my $rc = $self->ssh_script_run(cmd => "sudo cloud-init status --wait", timeout => 300);
-    record_info("cloud-init", $self->ssh_script_output("sudo cloud-init status --long", proceed_on_failure => 1, timeout => 300), result => $rc == 0 ? 'ok' : 'fail');
-    # Cloud-init error codes: 0 - success, 1 - unrecoverable error, 2 - recoverable error (See cloud-init documentation)
-    # As of https://bugzilla.suse.com/show_bug.cgi?id=1266207 we ignore recoverable errors
-    if (get_var('PUBLIC_CLOUD_IGNORE_CLOUDINIT_ERRORS') != 1) {
-        if ($rc == 1) {
-            die "unrecoverable cloud-init error";
-        } elsif ($rc == 2) {
-            record_info("cloud-init", "recoverable error (return code 2)");
-        } elsif ($rc != 0) {
-            die "unknown cloud-init return code $rc";
-        }
-    }
-
-    # cloud-id
-    my $cloud_id = (is_azure) ? 'azure' : 'aws';
-    $self->ssh_assert_script_run(cmd => "sudo cloud-id | grep '^$cloud_id\$'");
-
-    # cloud-init collect-logs
-    $self->ssh_assert_script_run('sudo cloud-init collect-logs');
-    $self->upload_log('~/cloud-init.tar.gz', failok => 1);
-
-    if (get_var('PUBLIC_CLOUD_CLOUD_INIT')) {
-        # Check for bootcmd, runcmd and write_files module
-        $self->ssh_assert_script_run('sudo grep pookie /root/test_cloud-init.txt');
-        $self->ssh_assert_script_run('sudo grep Mithrandir /root/test_cloud-init.txt');
-        $self->ssh_assert_script_run('sudo grep snickerdoodle /root/test_cloud-init.txt');
-
-        # Check for packages module
-        $self->ssh_assert_script_run('ed -V');
-
-        # Check for final_message module
-        $self->ssh_assert_script_run('sudo journalctl -b | grep "cloud-init qa has finished"');
-
-        # cloud-init schema
-        $self->ssh_assert_script_run('sudo cloud-init schema --system') unless (is_sle('=12-SP5'));
     }
 }
 
