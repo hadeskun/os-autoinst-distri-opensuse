@@ -20,14 +20,12 @@ sub check_cloudinit {
     record_info("cloud-init", $instance->ssh_script_output("sudo cloud-init status --long", proceed_on_failure => 1, timeout => 300), result => $rc == 0 ? 'ok' : 'fail');
     # Cloud-init error codes: 0 - success, 1 - unrecoverable error, 2 - recoverable error (See cloud-init documentation)
     # As of https://bugzilla.suse.com/show_bug.cgi?id=1266207 we ignore recoverable errors
-    if (get_var('PUBLIC_CLOUD_IGNORE_CLOUDINIT_ERRORS') != 1) {
-        if ($rc == 1) {
-            die "unrecoverable cloud-init error";
-        } elsif ($rc == 2) {
-            record_info("cloud-init", "recoverable error (return code 2)");
-        } elsif ($rc != 0) {
-            die "unknown cloud-init return code $rc";
-        }
+    if ($rc == 1) {
+        die "unrecoverable cloud-init error";
+    } elsif ($rc == 2) {
+        record_info("cloud-init", "recoverable error (return code 2)");
+    } elsif ($rc != 0) {
+        die "unknown cloud-init return code $rc";
     }
 
     # cloud-id
